@@ -1,0 +1,16 @@
+# Ignore the entire 'third_party' directory
+build/
+documentation/
+src/**
+
+# Ignore all .cpp files in the 'tests' directory, but not subdirectories
+# test/*.cpp
+
+# Ignore all files matching a pattern anywhere in the project (e.g., all files ending with _autogen.cpp)
+**/*_autogen.cpp
+
+# Example of a negated pattern:
+# Ignore everything in 'src', but then re-include main.cpp
+# This is less common for directories, but shows the syntax
+# src/*
+# !src/main.cpp
