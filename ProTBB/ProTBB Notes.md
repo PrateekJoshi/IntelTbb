@@ -227,6 +227,116 @@ Modern CPUs can do two big things to speed up programs:
 
 > It’s like giving each worker a power tool—and then hiring 31 more of them. ⚡🛠️
 
+---
+
+## Chapter 2 : Generic Parallel Algorithms
+
+### The Generic Algorithms in the Threading Building Blocks library
+
+| 🗂️ **Category**            | 🧩 **Generic Algorithm**         | 📝 **Brief Description**                                                                 | 🧪 **Syntax**                                                                 |
+|---------------------------|----------------------------------|------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| **Loop Parallelism**      | `parallel_for`                   | Executes loop iterations in parallel over a range.                                       | `parallel_for(range, body);`                                                 |
+|                           | `parallel_reduce`                | Parallel loop with a reduction operation (e.g., sum).                                    | `parallel_reduce(range, identity, func, reduction);`                         |
+|                           | `parallel_deterministic_reduce` | Like `parallel_reduce`, but ensures deterministic results regardless of thread count.    | `parallel_deterministic_reduce(range, identity, func, reduction);`          |
+|                           | `parallel_scan`                  | Computes prefix sums (inclusive/exclusive scan).                                         | `parallel_scan(range, body);`                                                |
+| **Function Invocation**   | `parallel_invoke`                | Executes multiple functions concurrently.                                                | `parallel_invoke(func1, func2, ..., funcN);`                                 |
+| **Stream Processing**     | `parallel_do`                    | Processes a stream of tasks with dynamic work addition.                                  | `parallel_do(input_range, body);`                                            |
+|                           | `parallel_for_each`              | Applies a function to each element in a range (parallel version of `std::for_each`).     | `parallel_for_each(begin, end, func);`                                       |
+| **Sorting**               | `parallel_sort`                  | Sorts elements in parallel using comparison-based sorting.                               | `parallel_sort(begin, end);`                                                 |
+| **Pipeline Processing**   | `pipeline`                       | Constructs a linear pipeline with custom serial or parallel filters.                     | `pipeline p; p.add_filter(...); p.run(token_count);`                         |
+|                           | `parallel_pipeline`              | Higher-level composable pipeline using chained filter stages via operator `&`.           | `parallel_pipeline(token_count, stage1 & stage2 & ...);`                     |
+
+
+### LAMBDA EXPRESSIONS –VS- USER-DEFINED CLASSES
+
+#### ✅ Using Lambda Expression
+
+```cpp
+#include <tbb/parallel_for.h>
+#include <vector>
+#include <iostream>
+
+int main() {
+    std::vector<int> data(10, 0);
+
+    tbb::parallel_for(0, static_cast<int>(data.size()), 1, 
+        [&data](int i) {
+            data[i] += 1;
+        });
+
+    for (int v : data) std::cout << v << " ";
+    return 0;
+}
+```
+#### 🧱 Using Functor (Function Object)
+
+```cpp
+#include <tbb/parallel_for.h>
+#include <vector>
+#include <iostream>
+
+struct IncrementFunctor {
+    std::vector<int>& data;
+
+    IncrementFunctor(std::vector<int>& d) : data(d) {}
+
+    void operator()(int i) const {
+        data[i] += 1;
+    }
+};
+
+int main() {
+    std::vector<int> data(10, 0);
+
+    tbb::parallel_for(0, static_cast<int>(data.size()), 1, IncrementFunctor(data));
+
+    for (int v : data) std::cout << v << " ";
+    return 0;
+}
+```
+
+#### 📊 Summary: Lambda vs Functor in `tbb::parallel_for`
+
+| Feature            | Lambda Expression                           | Functor                                       |
+|--------------------|----------------------------------------------|-----------------------------------------------|
+| **Syntax Style**   | Short, inline                                | Separate class with `operator()`              |
+| **Use Case**       | Ideal for simple, local logic                | Better for reusable or complex logic          |
+| **State Handling** | Captures external variables (by ref/value)   | Encapsulates internal state as members        |
+| **Reusability**    | Limited to the scope it's defined in         | Can be reused across codebases and files      |
+| **Readability**    | Very clean for small snippets                | More descriptive for structured operations     |
+| **Testability**    | Harder to test in isolation                  | Easy to write unit tests for the functor      |
+
+
+### Intel TBB Lazy initilization and warmup
+
+- Intel oneTBB (Threading Building Blocks) lazily initializes its worker threads—meaning they’re only created when needed. This can cause a delay the first time you run a parallel algorithm.
+
+- `warmupTBB()` below preemptively starts those threads so that subsequent parallel operations don’t suffer from that startup cost.
+
+```cpp
+void warmupTBB() {
+  tbb::parallel_for(0, tbb::info::default_concurrency(), 
+    [=](int) {
+      tbb::tick_count t0 = tbb::tick_count::now();
+      while ((tbb::tick_count::now() - t0).seconds() < 0.01);
+    }
+  );
+}
+```
+
+🧠 `warmupTBB()` Function Explained
+
+| 🔢 Line or Component                                 | 📝 Explanation |
+|------------------------------------------------------|----------------|
+| `static void warmupTBB()`                            | Defines a static helper function to warm up the TBB thread pool. |
+| `tbb::parallel_for(...)`                             | Runs a loop in parallel across available threads. |
+| `0, tbb::info::default_concurrency()`                | Loop from 0 to the number of hardware threads (cores). |
+| `[=](int)`                                           | Lambda capturing all variables by value (loop index unused). |
+| `tbb::tick_count t0 = tbb::tick_count::now();`       | Stores the current timestamp as a starting point. |
+| `while ((now - t0).seconds() < 0.01);`               | Busy-waits for 10 milliseconds to keep the thread active. |
+
+
+
 
 ## References 
 

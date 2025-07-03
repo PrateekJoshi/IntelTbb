@@ -1,0 +1,14 @@
+add_executable(1_lambda_vs_functors 1_lambda_vs_functors.cc )
+target_link_libraries(1_lambda_vs_functors TBB::tbb)
+
+add_executable(2_parallel_invoke_two_quickshort 2_parallel_invoke_two_quickshort.cc )
+target_link_libraries(2_parallel_invoke_two_quickshort TBB::tbb)
+
+add_executable(3_parallel_for_matrix_multipy 3_parallel_for_matrix_multipy.cc )
+target_link_libraries(3_parallel_for_matrix_multipy TBB::tbb)
+
+add_executable(4_parallel_reduce_maxNum 4_parallel_reduce_maxNum.cc )
+target_link_libraries(4_parallel_reduce_maxNum TBB::tbb)
+
+add_executable(5_parallel_reduce_pi 5_parallel_reduce_pi.cc )
+target_link_libraries(5_parallel_reduce_pi TBB::tbb)
