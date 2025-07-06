@@ -336,6 +336,116 @@ void warmupTBB() {
 | `while ((now - t0).seconds() < 0.01);`               | Busy-waits for 10 milliseconds to keep the thread active. |
 
 
+## Chapter 3 : Flow Graphs
+
+### 🔗 Intel TBB `join_node` Types Explained
+
+A `join_node` in Intel TBB's Flow Graph API synchronizes multiple inputs. It waits for messages on all its input ports, then combines them into a tuple and sends that tuple to the next node.
+
+---
+
+#### 🧩 Types of `join_node`
+
+| Type            | Description                                                                 | Use Case                                  |
+|-----------------|-----------------------------------------------------------------------------|-------------------------------------------|
+| `queueing`      | Waits for one message on each port, in the order they arrive.               | Simple synchronization.                   |
+| `reserving`     | Reserves messages until all inputs are available, then consumes them.       | Prevents message loss or premature use.   |
+| `key_matching`  | Matches messages based on a shared key (e.g., ID).                          | When inputs must be matched by key.       |
+
+---
+
+#### 🧪 Examples
+
+##### 1. `queueing` Join Node
+
+```cpp
+#include <tbb/flow_graph.h>
+#include <iostream>
+
+using namespace tbb::flow;
+
+int main() {
+    graph g;
+
+    function_node<int> a(g, unlimited, [](int x) { return x; });
+    function_node<float> b(g, unlimited, [](float y) { return y; });
+
+    join_node<tuple<int, float>, queueing> j(g);
+
+    function_node<tuple<int, float>> c(g, unlimited, [](const tuple<int, float>& t) {
+        std::cout << "Got: " << get<0>(t) << " and " << get<1>(t) << std::endl;
+    });
+
+    make_edge(a, input_port<0>(j));
+    make_edge(b, input_port<1>(j));
+    make_edge(j, c);
+
+    a.try_put(42);
+    b.try_put(3.14f);
+    g.wait_for_all();
+}
+```
+
+🧠 __Explanation__: Waits for one int and one float, then sends the tuple to node c.
+
+##### 2. `key_matching` Join Node
+
+```cpp
+join_node<tuple<int, float>, reserving> j(g);
+```
+
+🧠 __Explanation__: Reserves messages on each port and only removes them when all are available. Prevents consuming one input if the others aren’t ready.
+
+##### 3. `reserving` Join Node
+
+```cpp
+#include <string>
+
+struct Data {
+    int key;
+    std::string value;
+};
+
+auto key_func = [](const Data& d) { return d.key; };
+
+join_node<tuple<Data, Data>, key_matching<int>> j(g, key_func, key_func);
+```
+
+🧠 __Explanation__ : Matches two Data objects with the same key. Useful when inputs arrive out of order but must be paired by ID.
+
+#### ✅ Summary
+
+- Use `queueing` for simple, ordered synchronization.
+
+- Use `reserving` to avoid premature message consumption.
+
+- Use `key_matching` when inputs must be matched by a shared key.
+
+### 📊 Data Flow Graph vs Dependency Graph in Intel oneAPI (oneTBB)
+
+This table compares the two primary graph paradigms in Intel oneAPI's Threading Building Blocks (TBB) Flow Graph API.
+
+| Feature / Aspect              | **Data Flow Graph**                                                                 | **Dependency Graph**                                                                 |
+|------------------------------|--------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
+| **Definition**               | A graph where **data values** are passed between nodes.                            | A graph where **task completion signals** (not data) are passed between nodes.       |
+| **Message Type**             | Arbitrary data types (e.g., `int`, `std::string`, custom structs).                 | Always uses `continue_msg` to signal task completion.                                |
+| **Node Types Used**          | `function_node`, `input_node`, `source_node`, `join_node`, etc.                    | Primarily `continue_node`, sometimes `broadcast_node`, `join_node`.                  |
+| **Purpose**                  | Models **data-driven execution**: a node runs when it receives data.               | Models **control dependencies**: a node runs when all its predecessors complete.     |
+| **Data Transfer**            | ✅ Yes — actual data is passed from node to node.                                   | ❌ No — only a signal (`continue_msg`) is passed; data is accessed via shared state. |
+| **Execution Trigger**        | A node executes when it receives a message with data.                              | A node executes when it receives the required number of `continue_msg`s.             |
+| **Use Case**                 | Streaming pipelines, transformations, filtering, etc.                              | Task orchestration, dependency resolution, barrier-like behavior.                    |
+| **Example Node**             | `function_node<int>` receives and processes integers.                              | `continue_node` triggers execution after predecessors complete.                      |
+| **Parallelism Granularity** | Fine-grained, task-per-message.                                                    | Coarser-grained, task-per-dependency.                                                |
+| **Flexibility**              | High — supports complex data flows and transformations.                            | Simpler — focused on expressing execution order.                                     |
+| **Example Scenario**         | Image processing pipeline: load → filter → compress.                              | Task A and B must finish before C starts.                                            |
+
+---
+
+#### 🧠 Summary
+
+- Use a **Data Flow Graph** when your computation is **driven by data** and you want to pass values between stages.
+- Use a **Dependency Graph** when your computation is **driven by task completion** and you just need to enforce execution order.
+
 
 
 ## References 

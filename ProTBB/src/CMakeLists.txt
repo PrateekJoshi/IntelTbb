@@ -3,3 +3,4 @@
 # set(CMAKE_BUILD_TYPE Release)
 add_subdirectory(c1_jumping_right_in)
 add_subdirectory(c2_generic_parallel_algo)
+add_subdirectory(c3_flow_graphs)
