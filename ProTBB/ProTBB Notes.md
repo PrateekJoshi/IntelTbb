@@ -446,7 +446,44 @@ This table compares the two primary graph paradigms in Intel oneAPI's Threading 
 - Use a **Data Flow Graph** when your computation is **driven by data** and you want to pass values between stages.
 - Use a **Dependency Graph** when your computation is **driven by task completion** and you just need to enforce execution order.
 
+## Chapter 4 : TBB and the Parallel Algorithms of the C++ Standard Template Library
 
+### Intel TBB and its relation to Standard C++ Parallel STL
+
+#### 📚 Background
+
+- C++17 introduced parallel versions of standard algorithms via the `<execution>` header.
+- These algorithms accept execution policies like:
+  - `std::execution::seq` – Sequential
+  - `std::execution::par` – Parallel
+  - `std::execution::par_unseq` – Parallel + Vectorized
+
+- The C++ standard does **not mandate** how these are implemented.
+
+#### 🛠️ Implementation Details
+
+| Compiler / STL        | Uses TBB? | Notes                                                                 |
+|------------------------|-----------|-----------------------------------------------------------------------|
+| **GCC (libstdc++)**    | ✅ Yes     | Uses TBB if available. Required for `std::execution::par`.            |
+| **Clang (libc++)**     | ❌ No      | Parallel STL support is limited or experimental.                      |
+| **MSVC (Microsoft STL)** | ❌ No    | Uses its own internal thread pool. No TBB required.                   |
+
+#### ✅ Do You Need TBB?
+
+- **Using GCC?** → Yes, if you want to use `std::execution::par`, you need to install and link against **Intel TBB**.
+- **Using MSVC?** → No, TBB is not required.
+- **Using Clang?** → Support may be limited or require extra setup.
+
+
+### A Parallel STL Execution Policy Analogy 
+
+![](./img/1.png)
+
+![](./img/2.png)
+
+### Algorithms in Intel’s Parallel STL
+
+[Intel Docs ](https://www.intel.com/content/www/us/en/developer/articles/guide/get-started-with-parallel-stl.html)
 
 ## References 
 
