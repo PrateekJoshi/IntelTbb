@@ -485,6 +485,166 @@ This table compares the two primary graph paradigms in Intel oneAPI's Threading 
 
 [Intel Docs ](https://www.intel.com/content/www/us/en/developer/articles/guide/get-started-with-parallel-stl.html)
 
+
+### TBB custom iterators 
+
+1) 🔢 __tbb::counting_iterator__
+
+This iterator generates a sequence of values on the fly—no container needed.
+
+```cpp
+#include <tbb/tbb.h>
+#include <tbb/parallel_for.h>
+#include <tbb/iterators/counting_iterator.h>
+#include <iostream>
+
+int main() {
+    // Create a counting range from 0 to 10
+    auto begin = tbb::counting_iterator<int>(0);
+    auto end = tbb::counting_iterator<int>(10);
+
+    // Parallel loop over the generated range
+    tbb::parallel_for(begin, end, [](int i) {
+        std::cout << "Index: " << i << "\n";
+    });
+
+    return 0;
+}
+```
+
+🧠 Use case: When you need a virtual range of indices without allocating memory.
+
+2) 🔗 __tbb::zip_iterator__
+
+This lets you iterate over multiple containers in lockstep—like Python’s zip().
+
+```cpp
+#include <tbb/tbb.h>
+#include <tbb/parallel_for.h>
+#include <tbb/iterators/zip_iterator.h>
+#include <vector>
+#include <tuple>
+#include <iostream>
+
+int main() {
+    std::vector<int> a = {1, 2, 3};
+    std::vector<int> b = {10, 20, 30};
+
+    auto zipped_begin = tbb::make_zip_iterator(a.begin(), b.begin());
+    auto zipped_end = tbb::make_zip_iterator(a.end(), b.end());
+
+    tbb::parallel_for(zipped_begin, zipped_end, [](auto zipped) {
+        auto& [x, y] = zipped;
+        std::cout << "Sum: " << (x + y) << "\n";
+    });
+
+    return 0;
+}
+```
+
+🧠 Use case: When you want to process multiple containers in parallel without manual indexing.
+
+3) 🔁 __tbb::transform_iterator__
+
+This applies a transformation function on-the-fly during iteration.
+
+```cpp
+#include <tbb/tbb.h>
+#include <tbb/parallel_for.h>
+#include <tbb/iterators/transform_iterator.h>
+#include <vector>
+#include <iostream>
+
+int main() {
+    std::vector<int> data = {1, 2, 3, 4, 5};
+
+    // Define a transformation: square each element
+    auto square = [](int x) { return x * x; };
+
+    auto begin = tbb::make_transform_iterator(data.begin(), square);
+    auto end = tbb::make_transform_iterator(data.end(), square);
+
+    tbb::parallel_for(begin, end, [](int val) {
+        std::cout << "Squared: " << val << "\n";
+    });
+
+    return 0;
+}
+```
+
+🧠 Use case: When you want to apply a function during iteration without modifying the original data.
+
+### ⚙️ Intel TBB vs DPC++ — Side-by-Side Comparison
+
+| Feature / Aspect              | **Intel TBB (oneTBB)**                                               | **DPC++ (Data Parallel C++)**                                                 |
+|------------------------------|-----------------------------------------------------------------------|--------------------------------------------------------------------------------|
+| **Programming Model**        | Task-based parallelism on CPU                                        | SYCL-based data-parallelism across CPU, GPU, FPGA                             |
+| **Target Hardware**          | Multicore CPUs (Intel/AMD)                                           | Heterogeneous: CPUs, GPUs, FPGAs, and other accelerators                      |
+| **Language Base**            | C++                                                                  | C++ with SYCL extensions (Khronos SYCL-based)                                 |
+| **Execution Model**          | Shared-memory, fork-join task graph                                  | Offload model with command groups and device queues                           |
+| **Parallel Constructs**      | `parallel_for`, `parallel_reduce`, `flow::graph`, etc.               | `parallel_for`, `parallel_reduce`, `buffer/accessor`, `nd_range`, etc.       |
+| **Custom Iterators Support** | ✅ Yes, using STL-like iterators and utility adaptors                | ✅ Yes, e.g., `counting_iterator`, `zip_iterator`, `transform_iterator`       |
+| **Accelerator Support**      | ❌ No                                                                 | ✅ Full support (e.g., Intel GPUs, FPGAs)                                      |
+| **Memory Model**             | Shared memory                                                        | Unified Shared Memory (USM), buffer-accessor model                            |
+| **Compiler**                 | Any standard C++ compiler (e.g., `g++`, `clang++`)                   | Requires `dpcpp` (from Intel oneAPI)                                          |
+| **Use Case Focus**           | CPU-bound task parallelism, pipelines, flow graphs                   | Heterogeneous parallelism, GPU/accelerator offloading                         |
+| **Learning Curve**           | Moderate (STL-like APIs)                                             | Steeper (SYCL, device/memory models)                                          |
+| **STL Integration**          | Seamless with C++ STL                                                | Through oneDPL (DPC++ STL)                                                    |
+| **Best For**                 | High-performance CPU task scheduling and fine-grained parallelism    | Accelerated computing and data-parallel workloads across devices              |
+
+### Reading GCC/G++ Vectorization reports
+
+- Reading vectorization reports in G++ is a great way to understand how well your loops are being optimized into SIMD instructions.
+
+#### 🛠️ Step 1: Compile with Vectorization Reporting Flags
+
+```sh
+g++ -O3 -fopt-info-vec=vec.log your_code.cpp
+```
+
+- `O3`: Enables aggressive optimizations, including vectorization.
+- `fopt-info-vec=vec.log`: Dumps vectorization info into vec.log.
+
+👉 You can also use -fopt-info-vec-optimized, -fopt-info-vec-missed, or -fopt-info-vec-all for more control.
+
+
+#### 📂 Step 2: Read the vec.log File
+
+- Open vec.log and look for lines like:
+
+```
+your_code.cpp:10:13: optimized: loop vectorized using 16 byte vectors
+your_code.cpp:20:5: missed: not vectorized: unsafe loop dependency
+```
+
+- optimized: The loop was successfully vectorized.
+- missed: The compiler skipped vectorization—check the reason.
+- note: Additional context or analysis.
+
+#### Step 3: What to Look For
+
+
+| What to Check                              | Why It Matters                                                                 |
+|--------------------------------------------|---------------------------------------------------------------------------------|
+| ✅ `"loop vectorized"`                     | Confirms SIMD was applied                                                      |
+| ❌ `"not vectorized: unsafe dependency"`   | Indicates data dependencies blocked vectorization                              |
+| ❌ `"function call in loop"`               | Function calls can prevent vectorization unless inlined or marked `constexpr` |
+| ❌ `"unknown loop bound"`                  | Compiler needs clear loop bounds to vectorize safely                           |
+| ✅ `"using 16/32/64 byte vectors"`         | Shows the SIMD width used (SSE, AVX, AVX-512, etc.)                             |
+
+
+#### 🧠 Tips to Improve Vectorization
+
+- Use simple, countable loops with known bounds.
+- Avoid pointer aliasing (use restrict or references).
+- Minimize function calls inside loops.
+- Use aligned memory if possible.
+- Prefer contiguous containers like std::vector.
+
+
+- __NOTE__ :  Intel’s Parallel STL library uses OpenMP simd pragmas to support vectorization in a portable way for the
+`unseq` and `parallel_unseq` policies.
+
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)

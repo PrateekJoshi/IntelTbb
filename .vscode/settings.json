@@ -80,6 +80,14 @@
         "typeinfo": "cpp",
         "valarray": "cpp",
         "variant": "cpp",
-        "__locale": "cpp"
+        "__locale": "cpp",
+        "ranges": "cpp",
+        "regex": "cpp",
+        "__bit_reference": "cpp",
+        "__hash_table": "cpp",
+        "__split_buffer": "cpp",
+        "__tree": "cpp",
+        "bitset": "cpp",
+        "__nullptr": "cpp"
     }
 }
