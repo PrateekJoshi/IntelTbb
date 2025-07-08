@@ -645,6 +645,437 @@ your_code.cpp:20:5: missed: not vectorized: unsafe loop dependency
 - __NOTE__ :  Intel’s Parallel STL library uses OpenMP simd pragmas to support vectorization in a portable way for the
 `unseq` and `parallel_unseq` policies.
 
+## Chapter 5 : Synchronization: Why and How to Avoid It
+
+### 🔒 Intel TBB Mutex Flavors Comparison
+
+| **Mutex Type**             | **Scalable** | **Fair** | **Recursive** | **Reader-Writer** | **Wait Strategy** | **Best Use Case**                                      |
+|---------------------------|--------------|----------|---------------|-------------------|-------------------|--------------------------------------------------------|
+| `tbb::spin_mutex`         | ❌           | ❌       | ❌            | ❌                | Spin (yield)      | Very short critical sections with low contention       |
+| `tbb::mutex`              | ❌           | ❌       | ❌            | ❌                | Block             | General-purpose, tolerates higher contention           |
+| `tbb::queuing_mutex`      | ✅           | ✅       | ❌            | ❌                | Spin              | Fairness and scalability under high contention         |
+| `tbb::recursive_mutex`    | ❌           | ❌       | ✅            | ❌                | Block             | When recursive locking is required                    |
+| `tbb::spin_rw_mutex`      | ❌           | ❌       | ❌            | ✅                | Spin              | Many readers, few writers, short critical sections     |
+| `tbb::queuing_rw_mutex`   | ✅           | ✅       | ❌            | ✅                | Spin              | Scalable reader-writer locking with fairness           |
+| `tbb::speculative_spin_mutex` | ❌       | ❌       | ❌            | ❌                | Spin + HTM        | Hardware Transactional Memory (HTM) support available  |
+| `tbb::speculative_spin_rw_mutex` | ❌    | ❌       | ❌            | ✅                | Spin + HTM        | HTM-enabled reader-writer locking                      |
+
+
+- Spin = Fast but can burn CPU
+- Yield = Shares CPU time better than spin, still active
+- Block = Puts thread to sleep; lowest CPU use
+- HTM = Speculative magic—runs optimistically, falls back if needed
+
+### 🧠 What Is HTM?
+
+__Hardware Transactional Memory__ is a CPU feature that lets you execute a block of code __as if it were atomic—meaning__, either __all of it runs successfully__, or __none of it does__.
+
+Think of it like a "speculative lock":
+
+>“I’ll run this code assuming no one else interferes. If someone does, I’ll roll back and try again.”
+
+#### 🍪 Real-World Analogy
+
+Imagine you're baking cookies in a shared kitchen:
+  - You grab all the ingredients and start baking.
+  - If no one else touches your stuff, you finish and leave.
+  - But if someone grabs the flour mid-recipe, you throw everything away and start over.
+
+That’s HTM: __optimistic concurrency__.
+
+#### 🧪 Code Sketch (Intel TSX / HTM)
+
+```cpp
+#include <immintrin.h>  // For Intel TSX intrinsics
+#include <iostream>
+
+int main() {
+    unsigned status = _xbegin();  // Start HTM transaction
+
+    if (status == _XBEGIN_STARTED) {
+        // Critical section (speculative)
+        std::cout << "Inside HTM transaction\n";
+
+        // Commit transaction
+        _xend();
+    } else {
+        std::cout << "HTM transaction failed, fallback to lock\n";
+        // Fallback: use mutex or retry
+    }
+
+    return 0;
+}
+```
+
+#### 🧰 Can You Use HTM with g++?
+
+✅ Yes, but with caveats:
+
+##### ✅ HTM (Intel TSX) Requirements for g++
+
+| **Requirement** | **Details** |
+|-----------------|-------------|
+| **CPU Support** | Must support Intel TSX (e.g., Haswell, Skylake) |
+| **Compiler**    | `g++` supports HTM via Intel intrinsics in `<immintrin.h>` |
+| **Flags**       | Compile with `-mrtm` to enable TSX instructions |
+| **Example**     | `g++ -O2 -mrtm htm_example.cpp -o htm_test` |
+
+
+> ⚠️ Not all CPUs or OSes enable TSX by default (some disable it due to errata).
+
+#### 🧠 When to Use HTM?
+
+- Fine-grained locking is too slow
+- Low contention expected
+- You want to avoid traditional mutex overhead
+
+But HTM is __not a replacement__ for locks—it’s a speculative optimization.
+
+### Mutex Internal Flow
+
+- A thread wants to run but is blocked by a mutex → enters mutex __wait queue__.
+- Once the mutex unlocks, it moves to scheduler __ready queue__.
+- The __OS scheduler__ picks a thread from the ready queue.
+- The __dispatcher__ loads its context and starts execution on a core.
+
+
+### Mutex Flavors Examples
+
+__🔒 1. tbb::mutex – General-purpose blocking mutex__
+
+```cpp
+tbb::mutex mtx;
+
+void use_mutex(std::vector<int>& data) {
+    tbb::mutex::scoped_lock lock(mtx); // Blocks if already locked
+    data.push_back(1);
+}
+```
+✅ Use when: You expect moderate contention and want the OS to block threads instead of spinning.
+
+
+__🔁 2. tbb::recursive_mutex – Allows same thread to lock multiple times__
+
+```cpp
+tbb::recursive_mutex rec_mtx;
+
+void recursive_lock(int depth) {
+    if (depth == 0) return;
+    tbb::recursive_mutex::scoped_lock lock(rec_mtx);
+    std::cout << "Depth: " << depth << "\n";
+    recursive_lock(depth - 1); // Safe: same thread can re-lock
+}
+```
+✅ Use when: You need reentrant locking (e.g., recursive functions accessing shared state).
+
+
+__🔄 3. tbb::spin_mutex – Lightweight, busy-waiting lock__
+
+```cpp
+tbb::spin_mutex spin_mtx;
+
+void use_spin_mutex(std::vector<int>& data) {
+    tbb::spin_mutex::scoped_lock lock(spin_mtx); // Spins until lock is free
+    data.push_back(2);
+}
+```
+✅ Use when: Critical section is very short and contention is low. ⚠️ Avoid under high contention—it wastes CPU cycles.
+
+
+__📥 4. tbb::queuing_mutex – Fair and scalable under contention__
+
+```cpp
+tbb::queuing_mutex queue_mtx;
+
+void use_queuing_mutex(std::vector<int>& data) {
+    tbb::queuing_mutex::scoped_lock lock(queue_mtx); // FIFO fairness
+    data.push_back(3);
+}
+```
+✅ Use when: You want fairness and scalability under high contention.
+
+
+__🧪 5. tbb::speculative_spin_mutex – HTM + spin fallback__
+
+```cpp
+tbb::speculative_spin_mutex spec_mtx;
+
+void use_speculative_mutex(std::vector<int>& data) {
+    tbb::speculative_spin_mutex::scoped_lock lock(spec_mtx);
+    data.push_back(4);
+}
+```
+✅ Use when: Your CPU supports Intel TSX (HTM). ⚠️ Fallbacks to spin if HTM fails or is unavailable.
+
+
+__📚 6. tbb::spin_rw_mutex – Reader-writer lock with spin strategy__
+
+```cpp
+tbb::spin_rw_mutex rw_mtx;
+
+void read_data(const std::vector<int>& data) {
+    tbb::spin_rw_mutex::scoped_lock lock(rw_mtx, /* is writer */ false); // Shared (read) lock
+    std::cout << "Read size: " << data.size() << "\n";
+}
+
+void write_data(std::vector<int>& data) {
+    tbb::spin_rw_mutex::scoped_lock lock(rw_mtx, true); // Exclusive (write) lock
+    data.push_back(5);
+}
+```
+✅ Use when: Many readers, few writers. ⚠️ Writers block readers and vice versa.
+
+### Problem with Locks : Deadlock and Convoying
+
+#### 🛑 Deadlock: When Threads Hold Each Other Hostage
+
+__Definition__: Deadlock occurs when two or more threads are blocked forever, each waiting for the other to release a resource.
+
+__Common causes:__
+
+- Circular wait conditions
+- Nested resource locking
+- Incorrect lock acquisition order
+- Incorrect lock acquisition order
+
+```cpp
+// Both threads get stuck waiting for each other. 🔒
+std::mutex A, B;
+
+void thread1() {
+    std::lock_guard<std::mutex> lockA(A);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::lock_guard<std::mutex> lockB(B); // waits for B
+}
+
+void thread2() {
+    std::lock_guard<std::mutex> lockB(B);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::lock_guard<std::mutex> lockA(A); // waits for A
+}
+```
+
+#### 🐢 Convoying: The Lock Hog That Slows Everyone Down
+
+__Definition__: Convoying happens when a thread holding a lock gets descheduled (e.g., due to preemption), causing all other threads needing that lock to queue up and wait unnecessarily, reducing concurrency.
+
+__Symptoms__:
+- High contention
+- Spikes in latency
+- Poor scalability
+
+__Example scenario:__
+- One thread enters a critical section and is context-switched out.
+- Other threads pile up waiting for that lock.
+- Throughput drops because CPU cycles are wasted.
+
+#### ⚖️ How Convoying Is Different from Deadlock
+
+| **Aspect**       | **Deadlock**              | **Convoying**                        |
+|------------------|---------------------------|--------------------------------------|
+| **Threads stuck?** | Yes — indefinitely        | Not stuck — just delayed             |
+| **Root cause**    | Circular resource waits   | Poor scheduling or lock strategy     |
+| **Resolution**    | Needs design fix          | Can be improved with lock tuning     |
+
+__🧩 Strategies to Fix or Avoid__
+
+- Use `atomic` variable.
+- Use `std::scoped_lock` or `std::lock()` to avoid deadlock via lock ordering
+- Minimize critical section duration
+- Prefer fine-grained locks or lock-free data structures
+- Use backoff strategies (spin, yield, HTM`) to reduce convoying
+- Profiling tools like VTune or perf can pinpoint hotspots related to both issues
+
+### ⚙️ What Is CAS?
+
+__CAS is an atomic instruction__ used to update a value only if it matches an expected value. It’s a fundamental building block for lock-free programming.
+
+#### CAS Operation
+
+It takes three arguments:
+- Memory address (location of the variable)
+- Expected value
+- New value
+
+If the current value at the memory address equals the expected value, it atomically swaps it with the new value. Otherwise, it does nothing.
+
+#### 🧠 Under-the-Hood Implementation
+
+__Hardware Level__
+
+Modern CPUs (like x86, ARM) provide CAS via instructions like:
+- CMPXCHG (x86)
+- LDREX/STREX (ARM)
+
+These are atomic and typically implemented using cache coherence protocols to ensure consistency across cores.
+
+#### C++ Example
+
+```cpp
+#include <atomic>
+
+std::atomic<int> value{0};
+
+void tryUpdate() {
+    int expected = 0;
+    int desired = 42;
+    if (value.compare_exchange_strong(expected, desired)) {
+        // CAS succeeded: value is now 42
+    } else {
+        // CAS failed: someone else changed it
+    }
+}
+```
+
+#### 🧪 Example: Spinlock Using CAS
+
+```cpp
+std::atomic<bool> lockFlag{false};
+
+void lock() {
+    while (!lockFlag.compare_exchange_strong(false, true)) {
+        // spin until lock is acquired
+    }
+}
+
+void unlock() {
+    lockFlag.store(false);
+}
+```
+
+#### 🧵 CAS in Lock-Free Stack
+
+```cpp
+struct Node {
+    int value;
+    Node* next;
+};
+
+std::atomic<Node*> top{nullptr};
+
+void push(int val) {
+    Node* newNode = new Node{val};
+    Node* oldTop;
+    do {
+        oldTop = top.load();
+        newNode->next = oldTop;
+    } while (!top.compare_exchange_weak(oldTop, newNode));
+}
+```
+
+#### 🧩 CAS Caveats
+
+- __ABA Problem__ : Value changes from A → B → A, CAS sees no change. Solutions include version tagging.
+- __Spinning waste__: In high contention, threads may spin too long.
+- __Limited to single-word updates__: Can’t atomically update multiple variables.
+
+### ABA Problem 
+
+#### 🐛 Where ABA Creeps In
+
+Imagine this sequence:
+
+1. __Thread 1__ reads `top = A` and prepares to pop it.
+
+2. __Thread 1__ gets interrupted.
+
+3. __Thread 2__ pops `A`, deletes it, pushes a new node B, then pushes a new node `A` (reusing the same memory address as original `A`).
+
+4. __Thread 1__ resumes and sees `top == A` — same pointer, so CAS succeeds.
+
+5. But now `A` is a __different object__ — possibly with different data or invalid memory.
+
+This leads to __undefined behavior__, like accessing freed memory or corrupt data.
+
+#### 🛡️ How to Fix It
+
+##### ✅ Use Tagged Pointers or Version Counters
+
+A tagged pointer combines:
+ - A pointer to a node
+ - A version number (tag)
+
+This tag helps detect if the pointer was changed and then reverted — the classic __ABA__ scenario.
+
+Instead of just comparing the pointer, we compare the __pointer + tag__ as a single atomic unit.
+
+##### 🧪 C++ Example: Tagged Pointer in a Lock-Free Stack
+
+Let’s define a simple structure:
+
+```cpp
+#include <atomic>
+#include <cstdint>
+
+struct Node {
+    int value;
+    Node* next;
+};
+
+// Combine pointer and tag into one atomic unit
+struct TaggedPointer {
+    Node* ptr;
+    uint64_t tag;
+
+    bool operator==(const TaggedPointer& other) const {
+        return ptr == other.ptr && tag == other.tag;
+    }
+};
+
+// Atomic wrapper
+std::atomic<TaggedPointer> top;
+```
+
+##### 🔁 How CAS Works with TaggedPointer
+
+```cpp
+void push(Node* newNode) {
+    TaggedPointer oldTop = top.load();
+    TaggedPointer newTop;
+
+    do {
+        newNode->next = oldTop.ptr;
+        newTop.ptr = newNode;
+        newTop.tag = oldTop.tag + 1; // increment tag to reflect change
+    } while (!top.compare_exchange_strong(oldTop, newTop));
+}
+```
+
+__Breakdown:__
+
+ - `oldTop` holds the current pointer and tag.
+ - We prepare `newTop` with the new node and incremented tag.
+ - CAS succeeds only if both pointer and tag match — preventing ABA.
+
+
+### 🧵 True Sharing vs 🚨 False Sharing
+
+| **Aspect**             | **True Sharing**                                                   | **False Sharing**                                                        |
+|------------------------|---------------------------------------------------------------------|--------------------------------------------------------------------------|
+| **Definition**         | Multiple threads access and modify the **same memory location**     | Threads modify **different variables** that share the **same cache line** |
+| **Cause**              | Genuine shared data access                                          | Data proximity in memory layout                                          |
+| **Cache Impact**       | Frequent **cache invalidations** across cores                      | **Unnecessary cache invalidations** due to line sharing                  |
+| **Performance Issue**  | Contention, possible data races                                     | Cache thrashing, performance degradation                                 |
+| **Fix Strategy**       | Synchronization (e.g. locks, atomics)                               | Use **padding or alignment** to separate variables                      |
+| **Example Scenario**   | `shared_counter++` from multiple threads                            | Updating `struct { int a; int b; }` from different threads               |
+| **Preventable?**       | Not easily — depends on logic requirements                          | Yes — via struct padding or aligned memory                              |
+
+### Optimization Checklist 
+
+Serial 
+👇 
+Coarse Grained lock 
+👇 
+Fined Grained Lock 
+👇 
+Fined Grained Lock + HTM 
+👇  
+Atomics 
+👇 
+Thead Local Storage ( TLS) + Reduction
+👇 
+Thead Local Storage ( TLS) + Parallel Reduction
+
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)
