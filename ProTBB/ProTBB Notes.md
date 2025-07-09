@@ -1076,6 +1076,170 @@ Thead Local Storage ( TLS) + Reduction
 👇 
 Thead Local Storage ( TLS) + Parallel Reduction
 
+---
+
+## Chapter 6 : Data Structures for Concurrency
+
+### 📦 Intel TBB Concurrent Containers
+
+| **Container**                        | **Use Case**                                                                 | **Basic Syntax**                                                                 | **Performance Notes**                                                                 |
+|-------------------------------------|------------------------------------------------------------------------------|----------------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
+| `tbb::concurrent_vector<T>`         | Thread-safe dynamic array; parallel append and access                        | `tbb::concurrent_vector<int> vec; vec.push_back(42);`                            | Lock-free append; slower than `std::vector` in serial; great for parallel growth      |
+| `tbb::concurrent_queue<T>`          | FIFO queue for producer-consumer patterns                                    | `tbb::concurrent_queue<int> q; q.push(1); q.try_pop(&val);`                      | Lock-free; high throughput; non-blocking semantics                                     |
+| `tbb::concurrent_bounded_queue<T>`  | Bounded FIFO queue with blocking semantics                                   | `q.set_capacity(100); q.push(1); q.pop(val);`                                    | Thread-safe with blocking; useful for throttling and backpressure                     |
+| `tbb::concurrent_priority_queue<T>` | Thread-safe priority queue                                                   | `q.push(42); q.try_pop(&val);`                                                   | Lock-based; slower than `std::priority_queue`; good for prioritized task scheduling    |
+| `tbb::concurrent_hash_map<K, V>`    | Thread-safe associative container with fine-grained locking                  | `tbb::concurrent_hash_map<std::string, int> map; map.insert({key, val});`       | High concurrency; uses accessors for safe reads/writes                                 |
+| `tbb::concurrent_unordered_map<K,V>`| Lock-free hash map (preview status)                                          | `map.emplace("key", 42);`                                                        | Lock-free reads; experimental; faster than `concurrent_hash_map` in some scenarios     |
+| `tbb::concurrent_set<T>`            | Thread-safe ordered set                                                      | `tbb::concurrent_set<int> s; s.insert(5);`                                       | Lock-based; slower than `std::set`; good for concurrent inserts                        |
+| `tbb::concurrent_multiset<T>`       | Thread-safe multiset                                                         | `s.insert(5);`                                                                   | Similar to `concurrent_set`; allows duplicates                                         |
+| `tbb::concurrent_map<K, V>`         | Thread-safe ordered map                                                      | `map.insert({key, val});`                                                        | Lock-based; slower than `std::map`; good for concurrent access                         |
+| `tbb::concurrent_multimap<K, V>`    | Thread-safe multimap                                                         | `map.insert({key, val});`                                                        | Allows duplicate keys; similar performance to `concurrent_map`                         |
+
+#### 🧠 Notes
+
+- **Lock-Free vs Lock-Based**: Containers like `concurrent_vector` and `concurrent_queue` are lock-free and scale well. Associative containers like `concurrent_hash_map` use fine-grained locking.
+- **Accessors**: For maps, use `accessor` or `const_accessor` to safely read/write elements.
+- **Preview Containers**: `concurrent_unordered_map` is in preview—fast but not yet fully supported.
+- **Serial vs Parallel Tradeoff**: STL containers may outperform TBB in serial code due to lower overhead, but TBB excels in concurrent environments.
+
+### ⚠️ Iterating Over TBB Concurrent Containers 
+
+- Iterating over concurrent containers **while other threads modify them** is dangerous.
+- `tbb::concurrent_hash_map` allows iteration, but it's meant for **debugging only**.
+- STL-style containers like `concurrent_unordered_map` return iterators from `insert` and `find`, which **tempts unsafe iteration**.
+- If you **only use iterators for lookup**, and no updates happen, it's safe.
+- But if you **iterate while other threads insert/delete**, you risk **data corruption**.
+- The API **does not protect you**—you must handle synchronization yourself.
+
+#### ✅ Safe Usage Example (Only Lookup, No Updates)
+
+```cpp
+tbb::concurrent_hash_map<std::string, int> cmap;
+
+// Assume cmap is populated and no thread modifies it during iteration
+for (auto it = cmap.begin(); it != cmap.end(); ++it) {
+    std::cout << it->first << ": " << it->second << "\n";
+}
+```
+
+#### ❌ Unsafe Usage Example (Concurrent Modification)
+
+```cpp
+tbb::concurrent_unordered_map<std::string, int> umap;
+
+// Another thread might be inserting or deleting keys
+for (auto it = umap.begin(); it != umap.end(); ++it) {
+    std::cout << it->first << ": " << it->second << "\n"; // Risky!
+}
+```
+#### 🔐 Safer Strategy
+
+- Use `accessor` or `const_accessor` with `concurrent_hash_map` for safe access.
+- Avoid iterating unless you're sure no concurrent updates are happening.
+- For debugging, snapshot the container first or isolate access.
+
+### ⚖️ tbb::concurrent_unordered_map vs tbb::concurrent_hash_map
+
+| Feature/Aspect         | `tbb::concurrent_unordered_map`                 | `tbb::concurrent_hash_map`                       |
+| :--------------------- | :---------------------------------------------- | :----------------------------------------------- |
+| **Concurrent Operations** | Insert, Lookup, Traversal                       | Insert, Lookup, **Erasure**, Traversal           |
+| **Concurrent Erasure** | **NO** (requires external synchronization)      | **YES** (built-in support)                       |
+| **API Style** | Similar to `std::unordered_map` (direct methods) | Uses `accessor` and `const_accessor` objects     |
+| **Internal Concurrency Model** | Often lock-free or highly concurrent non-blocking algorithms (e.g., split-ordered list) for reads/inserts. | Fine-grained locking (e.g., per-bucket locks) managed by accessors. |
+| **Performance (Read/Insert-Heavy)** | Can be very fast due to minimal synchronization overhead. | Potentially slightly slower due to locking overhead, but still highly concurrent. |
+| **Performance (Mixed Workload w/ Erasure)** | Requires external synchronization for erase, which can negate performance or add complexity. | Generally robust and efficient due to built-in concurrent erase support. |
+| **Complexity of Use** | Simpler, more direct API for basic operations. | Slightly more complex due to accessor management. |
+| **Typical Use Case** | Workloads dominated by concurrent reads and insertions, where erasures are rare or serialized. | Workloads with frequent concurrent insertions, lookups, AND erasures. |
+
+### ⚠️ Why size() and empty() Are Risky in `tbb::concurrent_queue`
+
+- __Not atomic__: These methods compute values based on internal counters (head_counter, tail_counter, etc.) that may be changing due to concurrent push or pop operations.
+
+- __Snapshot inconsistency__: You might read a value that was valid a moment ago but is already outdated due to another thread’s activity.
+
+- __False assumptions__: For example, empty() might return true, but a push() could happen immediately after, making the queue non-empty—leading to race conditions if you act on that assumption.
+
+#### 🧠 Design Philosophy
+
+TBB encourages using `try_push()` and `try_pop()` instead of inspecting the queue state:
+ - These methods are atomic and safe.
+ - They avoid the “check-then-act” anti-pattern common in multithreaded code.
+
+#### ✅ Safer Alternative
+
+Instead of :
+
+```cpp
+if (!queue.empty()) {
+    T item;
+    queue.pop(item); // Risky: another thread may have popped it already
+}
+```
+
+Use:
+
+```cpp
+T item;
+if (queue.try_pop(item)) {
+    // Safe: item was successfully popped
+}
+```
+
+### ⚙️ Summary: Queues vs `parallel_do` / `pipeline` in Parallel Programs
+
+#### 🧠 Why Queues Can Be Inefficient
+- **Ordering overhead** makes queues natural bottlenecks.
+- A thread calling `pop()` **blocks** if the queue is empty.
+- **Cache inefficiency**: Values pushed to the queue may sit idle and become cold, or get moved across cores—slowing access.
+- Queues are **passive structures**: no scheduling logic to optimize processing or locality.
+
+#### 🚀 Advantages of `parallel_do` and `pipeline`
+- Threading is **implicit and optimized**: worker threads stay busy, avoiding idle waits.
+- **Better cache locality**: items often stay on the “hot” thread that submitted them.
+- **Work stealing** ensures idle threads can help without moving data unnecessarily.
+- Designed to **avoid coordination overhead** of queues—great for throughput and scalability.
+
+#### ✅ TL;DR
+Before using explicit queues in parallel code, consider `parallel_do` or `pipeline` for better performance, reduced latency, and smarter thread utilization.
+
+### 📦 `tbb::concurrent_vector` – Key Notes & Supported Methods
+
+#### 🧠 Things to Note
+- **Thread-safe growth**: Multiple threads can safely append elements.
+- **Random access**: Supports indexed access like `std::vector`.
+- **No relocation**: Existing elements are __never moved during growth__.
+- **Fragmentation**: Internally segmented; use `compact()` to defragment.
+- **No erase/insert**: Does not support element removal or mid-vector insertion.
+- **Safe concurrent reads**: Reading elements is thread-safe.
+- **Exception safety caveats**: Constructor exceptions can leave vector in invalid state.
+
+
+#### 🛠️ Supported Methods
+
+| **Method**                      | **Description**                                                                 |
+|--------------------------------|----------------------------------------------------------------------------------|
+| `push_back(const T&)`          | Append one element safely                                                       |
+| `grow_by(n)`                   | Append `n` default-constructed elements                                         |
+| `grow_by(n, const T&)`         | Append `n` copies of a given element                                            |
+| `grow_to_at_least(n)`          | Ensure vector has at least `n` elements                                         |
+| `operator[](index)`            | Access element at index (thread-safe for reads)                                |
+| `at(index)`                    | Bounds-checked access (throws on invalid index)                                |
+| `size()`                       | Current size (may include under-construction elements)                         |
+| `capacity()`                   | Current capacity before reallocation                                            |
+| `reserve(n)`                   | Pre-allocate space for `n` elements (__not thread-safe__)                          |
+| `compact()`                    | Defragment internal segments                                                    |
+| `clear()`                      | Clear contents (__not thread-safe__)                                                |
+| `begin()`, `end()`             | Iterators (__safe only for debug or read-only use__)                               |
+| `range(grainsize)`             | Returns a range for parallel iteration                                          |
+| `front()`, `back()`            | Access first/last element                                                       |
+| `assign(n, const T&)`          | Fill with `n` copies of a value                                                 |
+| `swap(other)`                  | Swap contents with another vector                                               |
+| `get_allocator()`              | Returns allocator used                                                          |
+
+---
+
+
+
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)
