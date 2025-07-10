@@ -1238,8 +1238,372 @@ Before using explicit queues in parallel code, consider `parallel_do` or `pipeli
 
 ---
 
+## Chapter 7 : Scalable Memory Allocation
 
+## 🚀 Ways to Use Intel TBB Scalable Memory Allocator
+
+| **Method**                              | **Usage**                                                                 | **Example**                                                                                   | **Use Case**                                                                 |
+|----------------------------------------|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| `tbb::scalable_allocator<T>`           | STL-compatible allocator for containers                                  | `std::vector<int, tbb::scalable_allocator<int>> vec;`                                         | Replace default allocator for better multithreaded performance              |
+| `scalable_malloc(size_t)`              | Manual memory allocation                                                 | `void* ptr = scalable_malloc(1024);`                                                          | Allocate raw memory with scalable behavior                                  |
+| `scalable_free(void*)`                 | Manual memory deallocation                                               | `scalable_free(ptr);`                                                                         | Free memory allocated via `scalable_malloc`                                 |
+| `scalable_calloc(size_t, size_t)`      | Allocate zero-initialized memory                                         | `void* ptr = scalable_calloc(100, sizeof(int));`                                              | Similar to `calloc`, but thread-scalable                                    |
+| `scalable_realloc(void*, size_t)`      | Resize previously allocated memory                                       | `ptr = scalable_realloc(ptr, 2048);`                                                          | Resize memory block with scalable allocator                                 |
+| `tbb::memory_pool_allocator<T>`        | Pool-based allocator for faster reuse                                    | `std::vector<int, tbb::memory_pool_allocator<int>> vec(pool);`                                | Efficient reuse of memory in high-frequency allocation scenarios            |
+| `tbb::cache_aligned_allocator<T>`      | Allocator with cache line alignment                                      | `std::vector<int, tbb::cache_aligned_allocator<int>> vec;`                                    | Avoid false sharing in parallel loops                                       |
+| `tbbmalloc_proxy`                      | Replace global `malloc/new` with scalable allocator                      | Link with `tbbmalloc_proxy`                                                                  | Apply scalable allocation across entire app without code changes            |
+| `scalable_allocation_mode(...)`        | Configure allocator behavior (e.g. huge pages)                           | `scalable_allocation_mode(TBBMALLOC_USE_HUGE_PAGES, 1);`                                      | Enable huge pages for better memory locality                                |
+| `scalable_allocation_command(...)`     | Control allocator internals (e.g. buffer cleanup)                        | `scalable_allocation_command(TBBMALLOC_CLEAN_ALL_BUFFERS, 0);`                                | Reclaim memory from internal buffers                                        |
+
+---
+
+## 🧠 Notes
+- **Thread-safe**: All methods are designed for concurrent use.
+- **Performance Boost**: Reduces contention and improves cache locality.
+- **Drop-in Replacement**: Can be used with STL containers or custom allocators.
+- **Memory Pooling**: `memory_pool_allocator` helps reduce fragmentation and reuse memory efficiently.
+
+- The C/C++ proxy library is by far the most popular way to use the scalable memory allocator.
+
+### C++ 17 `std::hardware_destructive_interference_size`
+
+- It is a C++17 constant that helps you avoid false sharing in multithreaded programs by aligning data to cache line boundaries.
+
+- It gives you the recommended alignment size (usually 64 bytes on x86) to separate variables across cache lines, reducing interference between threads.
+
+```cpp
+struct ThreadData {
+    alignas(std::hardware_destructive_interference_size) 
+    std::atomic<int> counter;
+};
+
+/*
+Legacy style:
+struct alignas(64) SharedData {
+    std::atomic<int> counter1;
+    char pad[64 - sizeof(std::atomic<int>)];
+    std::atomic<int> counter2; // On next cache line
+};
+
+This ensures counter1 and counter2 sit on separate cache lines, avoiding false sharing if accessed by different threads.
+*/
+```
+
+- Use `perf record -e cache-references,cache-misses` or Intel VTune’s false sharing analysis to see if struct design is causing cache contention. You can correlate hot fields with usage frequency and access patterns.
+
+###  ⚙️ Performance Comparison of Memory Allocators
+
+| **Allocator**         | **Thread Scalability** | **Latency**           | **Memory Efficiency** | **Release Behavior**             | **Best Use Case**                                |
+|-----------------------|------------------------|------------------------|------------------------|----------------------------------|--------------------------------------------------|
+| **TBBmalloc**         | ✅ Good                | ⚠️ Moderate            | ✅ Efficient           | ✅ Releases memory post-use       | HPC apps, threaded DB engines                    |
+| **jemalloc**          | ✅ Excellent           | ✅ Low latency         | ⚠️ High memory usage   | ⚠️ Holds memory longer            | General-purpose, low-latency multithreading      |
+| **TCMalloc**          | ✅ Good                | ✅ Consistent          | ✅ Efficient           | ❌ Doesn’t release memory well     | Web servers, Google-scale apps                   |
+| **Lockless (llalloc)**| ✅ Excellent           | ✅ Very low latency    | ✅ Very efficient       | ✅ Returns memory aggressively     | Real-time systems, custom alloc-heavy apps       |
+
+
+### Compilation Considerations
+
+When compiling with programs with the Intel compilers or gcc, it is best to pass in the following flags:
+
+```
+-fno-builtin-malloc (on Windows: /Qfno-builtin-malloc)
+-fno-builtin-calloc (on Windows: /Qfno-builtin-calloc)
+-fno-builtin-realloc (on Windows: /Qfno-builtin-realloc)
+-fno-builtin-free (on Windows: /Qfno-builtin-free)
+```
+
+This is because a compiler may make some optimizations assuming it is using its own built-in functions. These assumptions may not be true when using other memory allocators.
+
+### 🚀 Different Ways to Use Intel TBB Scalable Allocator in C++ Applications
+
+#### 1. **STL-Compatible Allocator for Containers**
+
+Use `tbb::scalable_allocator<T>` as a drop-in replacement for `std::allocator<T>` in STL containers.
+
+```cpp
+#include <tbb/scalable_allocator.h>
+std::vector<int, tbb::scalable_allocator<int>> vec;
+```
+✅ Best for: std::vector, std::map, std::unordered_map, etc. in parallel code.
+
+#### 2. Manual Allocation APIs
+
+```cpp
+#include <tbb/scalable_allocator.h>
+
+void* ptr = scalable_malloc(1024);       // Allocate 1024 bytes
+ptr = scalable_realloc(ptr, 2048);       // Resize to 2048 bytes
+scalable_free(ptr);                      // Free memory
+```
+
+✅ Best for: Custom allocators, buffers, or non-STL structures.
+
+
+#### 3. Memory Pool Allocator
+
+Use `tbb::memory_pool_allocator<T>` for efficient reuse of similarly sized allocations.
+
+```cpp
+#include <tbb/memory_pool_allocator.h>
+std::vector<int, tbb::memory_pool_allocator<int>> pool_vec;
+```
+
+✅ Best for: High-frequency allocation/deallocation patterns.
+
+#### 4. Cache-Aligned Allocator
+
+Use `tbb::cache_aligned_allocator<T>` to avoid false sharing in parallel loops.
+
+```cpp
+#include <tbb/cache_aligned_allocator.h>
+std::vector<int, tbb::cache_aligned_allocator<int>> aligned_vec;
+```
+
+✅ Best for: Shared data structures accessed by multiple threads.
+
+#### 5. Global Replacement via Proxy Library
+
+Link with `tbbmalloc_proxy` to replace all `malloc/new` calls with scalable versions.
+
+🔧 Compile with Proxy
+
+```cpp
+g++ -O2 -std=c++17 your_app.cpp -ltbbmalloc_proxy -ltbb -o your_app
+```
+
+🚀 Run with LD_PRELOAD
+
+```
+LD_PRELOAD=/path/to/libtbbmalloc_proxy.so ./your_app
+```
+✅ Best for: Legacy codebases or third-party libraries where allocator replacement is needed without code changes.
+
+#### 6. Custom Smart Pointer Allocation
+
+Use `std::allocate_shared` with `tbb::scalable_allocator` for smart pointer creation.
+
+```cpp
+auto ptr = std::allocate_shared<MyClass>(tbb::scalable_allocator<MyClass>(), args...);
+```
+✅ Best for: Modern C++ code using smart pointers with allocator control.
+
+#### 7. Allocator Configuration
+
+Use `scalable_allocation_mode()` or` scalable_allocation_command()` to tweak behavior.
+
+```cpp
+scalable_allocation_mode(TBBMALLOC_USE_HUGE_PAGES, 1);
+scalable_allocation_command(TBBMALLOC_CLEAN_ALL_BUFFERS, 0);
+```
+✅ Best for: Advanced tuning (e.g., huge pages, buffer cleanup).
+
+## 🔗 Coupling of Allocate–Deallocate Functions by Families in TBB Scalable Allocator
+
+Intel TBB’s scalable memory allocator provides multiple families of allocation and deallocation functions. Each family is designed to mirror a specific standard (like C, POSIX, or Microsoft CRT), and **each allocation function must be paired with its corresponding deallocation function** to ensure correctness and avoid undefined behavior.
+
+---
+
+#### 🧩 Function Families Overview
+
+| **Allocation Function**                  | **Deallocation Function**         | **Analogous To**         |
+|------------------------------------------|-----------------------------------|---------------------------|
+| `scalable_malloc(size_t)`                | `scalable_free(void*)`            | `malloc` / `free` (C)     |
+| `scalable_calloc(size_t, size_t)`        | `scalable_free(void*)`            | `calloc` / `free` (C)     |
+| `scalable_realloc(void*, size_t)`        | `scalable_free(void*)`            | `realloc` / `free` (C)    |
+| `scalable_posix_memalign(void**, size_t, size_t)` | `scalable_free(void*)`    | `posix_memalign` (POSIX) |
+| `scalable_aligned_malloc(size_t, size_t)`| `scalable_aligned_free(void*)`    | `_aligned_malloc` (MS CRT)|
+| `scalable_aligned_realloc(void*, size_t, size_t)` | `scalable_aligned_free(void*)` | `_aligned_realloc` (MS CRT)|
+
+---
+
+#### ⚠️ Important Notes
+
+- **Do not mix families**: For example, memory allocated with `scalable_aligned_malloc` must be freed with `scalable_aligned_free`, not `scalable_free`.
+- **Thread-safe**: All functions are designed for concurrent use.
+- **Fallback behavior**: If TBB’s allocator library is unavailable, `tbb::tbb_allocator` falls back to standard `malloc`/`free`.
+
+### 🧠 What is `tbb::memory_pool_allocator`?
+
+It’s a **scalable memory allocator** from Intel TBB that pools memory to reduce allocation overhead, especially for small objects. It wraps around a memory pool (like `tbb::memory_pool`) and provides STL-compatible allocation.
+
+- __Memory Pool__: Instead of directly calling malloc or new for every small allocation, a memory pool pre-allocates a larger chunk of memory from the system. When an allocation request comes, it serves it from this pre-allocated pool. When an object is deallocated, its memory is returned to the pool for reuse, rather than being freed back to the operating system immediately.
+
+- __Benefits of Memory Pools__:
+ - __Reduced Overhead__: Less overhead from system calls (malloc/free or new/delete) as allocations are handled within the pool.
+ - __Improved Locality__: Objects allocated from the same pool tend to be closer in memory, which can improve cache performance.
+ - __Reduced Fragmentation__: By managing memory in fixed-size blocks or by specific patterns, memory fragmentation can be mitigated.
+ - __Scalability__: In a multi-threaded environment, tbb::memory_pool_allocator is designed to be scalable, meaning it minimizes contention for memory resources among threads.
+
+- __`std::allocator` compliance__: It adheres to the `std::allocator` concept, meaning you can use it directly with C++ Standard Library containers like `std::vector`, `std::list`, `std::map`, etc., to manage their memory.
+
+#### How it works (simplified):
+
+The` tbb::memory_pool_allocator` typically works in conjunction with a `tbb::memory_pool` object (or `tbb::fixed_pool` for fixed-size allocations). The `tbb::memory_pool` is the actual pool that manages the large blocks of memory. The `tbb::memory_pool_allocator` then acts as an interface for containers to request and release memory from that specific pool.
+
+When you create a container with `tbb::memory_pool_allocator`, the allocator will:
+ 1. Request memory from the associated `tbb::memory_pool`.
+ 2. If the pool doesn't have enough pre-allocated memory, it might request more from the underlying system allocator (e.g., `scalable_allocator`, `std::allocator`, or directly `mmap`/`VirtualAlloc` for large chunks).
+ 3. When an object is deallocated, the memory is returned to the pool's internal free list for future reuse by the same or other threads.
+
+#### Syntax:
+
+To use `tbb::memory_pool_allocator`, you generally need two components:
+
+1. A `tbb::memory_pool `(or `tbb::fixed_pool`) instance that serves as the actual memory pool.
+2. An instance of `tbb::memory_pool_allocator` template, specialized for the type of objects you want to allocate, and linked to your `tbb::memory_pool`.
+
+```cpp
+// To enable memory pools, you might need to define TBB_PREVIEW_MEMORY_POOL macro
+// (or check your TBB version, as it might be enabled by default in newer versions).
+// #define TBB_PREVIEW_MEMORY_POOL 1 
+template<typename T, typename P = tbb::detail::r1::pool_base>
+class tbb::memory_pool_allocator;
+```
+
+#### Example :
+
+```cpp
+#include <iostream>
+#include <vector>
+#include <list>
+#include <string>
+#include <tbb/memory_pool.h> // For tbb::memory_pool and tbb::memory_pool_allocator
+#include <tbb/scalable_allocator.h> // Often used as the underlying allocator for the pool
+
+// Define this macro if memory_pool is a preview feature in your TBB version
+// #define TBB_PREVIEW_MEMORY_POOL 1 
+
+int main() {
+    // 1. Create a tbb::memory_pool
+    // The memory_pool template parameter specifies the underlying allocator for the pool itself.
+    // tbb::scalable_allocator is often a good choice for this as it's designed for scalability.
+    tbb::memory_pool<tbb::scalable_allocator<char>> myPool; 
+
+    // 2. Define a custom allocator type using tbb::memory_pool_allocator
+    //    This allocator will get memory from 'myPool'.
+    using MyIntAllocator = tbb::memory_pool_allocator<int, tbb::memory_pool<tbb::scalable_allocator<char>>>;
+    using MyStringAllocator = tbb::memory_pool_allocator<std::string, tbb::memory_pool<tbb::scalable_allocator<char>>>;
+
+    // 3. Create STL containers using the custom allocator
+    //    Pass the pool instance to the allocator's constructor.
+
+    // std::vector using the memory pool
+    std::vector<int, MyIntAllocator> intVector(MyIntAllocator(myPool));
+    std::cout << "Vector using memory pool:" << std::endl;
+    for (int i = 0; i < 10; ++i) {
+        intVector.push_back(i * 10);
+    }
+    for (int val : intVector) {
+        std::cout << val << " ";
+    }
+    std::cout << std::endl;
+
+    // std::list using the memory pool
+    std::list<std::string, MyStringAllocator> stringList(MyStringAllocator(myPool));
+    std::cout << "List using memory pool:" << std::endl;
+    stringList.push_back("Hello");
+    stringList.push_back("TBB");
+    stringList.push_back("Memory");
+    stringList.push_back("Pool");
+
+    for (const auto& s : stringList) {
+        std::cout << s << " ";
+    }
+    std::cout << std::endl;
+
+    // When intVector and stringList go out of scope, their destructors will call
+    // deallocate on the memory_pool_allocator, which returns memory to 'myPool'.
+    // When 'myPool' goes out of scope, it will release all the memory it holds back to the system.
+
+    return 0;
+}
+```
+
+- __`tbb::fixed_pool`__: This is a memory pool specifically designed for allocating objects of a fixed size. It's highly efficient because it avoids the overhead of managing variable-sized blocks.
+
+```cpp
+#include <iostream>
+#include <vector>
+#include <string>
+#include <tbb/memory_pool.h> // For tbb::fixed_pool and tbb::memory_pool_allocator
+#include <tbb/scalable_allocator.h> // Good for the underlying pool allocation
+
+// Define this macro if memory_pool/fixed_pool is a preview feature in your TBB version
+// #define TBB_PREVIEW_MEMORY_POOL 1 
+
+// A simple struct with a fixed size
+struct MyFixedSizeObject {
+    int id;
+    double value;
+    char name[16]; // Fixed size character array
+
+    MyFixedSizeObject(int i = 0, double v = 0.0, const char* n = "") : id(i), value(v) {
+        std::strncpy(name, n, sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0'; // Ensure null termination
+    }
+
+    // Default constructor is important for vector resizing etc.
+    MyFixedSizeObject() : id(0), value(0.0) {
+        name[0] = '\0';
+    }
+
+    void print() const {
+        std::cout << "ID: " << id << ", Value: " << value << ", Name: " << name << std::endl;
+    }
+};
+
+int main() {
+    // 1. Create a tbb::fixed_pool
+    //    It needs to know the size of the objects it will allocate.
+    //    We explicitly tell it the size of MyFixedSizeObject.
+    //    The second template argument is the underlying allocator for the pool itself.
+    tbb::fixed_pool<tbb::scalable_allocator<char>> myFixedPool(sizeof(MyFixedSizeObject));
+
+    // 2. Define a custom allocator type using tbb::memory_pool_allocator
+    //    This allocator will draw memory from 'myFixedPool'.
+    //    Note: tbb::memory_pool_allocator expects a pool_base (or derived) object.
+    //    tbb::fixed_pool derives from pool_base.
+    using MyFixedObjectAllocator = tbb::memory_pool_allocator<MyFixedSizeObject, 
+                                                              tbb::fixed_pool<tbb::scalable_allocator<char>>>;
+
+    // 3. Create an STL container (e.g., std::vector) using the custom allocator
+    //    Pass the pool instance to the allocator's constructor.
+    std::vector<MyFixedSizeObject, MyFixedObjectAllocator> objectsVector(MyFixedObjectAllocator(myFixedPool));
+
+    std::cout << "Vector using tbb::fixed_pool for MyFixedSizeObject:" << std::endl;
+
+    // Add objects to the vector
+    for (int i = 0; i < 5; ++i) {
+        objectsVector.emplace_back(i + 1, static_cast<double>(i) * 1.5, "Item_" + std::to_string(i));
+    }
+
+    // Print objects
+    for (const auto& obj : objectsVector) {
+        obj.print();
+    }
+
+    // You can also demonstrate allocation and deallocation directly (less common with containers)
+    std::cout << "\nDirect allocation from fixed pool (demonstration):" << std::endl;
+    MyFixedSizeObject* obj1 = myFixedPool.allocate<MyFixedSizeObject>();
+    new (obj1) MyFixedSizeObject(99, 99.9, "Direct1"); // Placement new
+    obj1->print();
+    myFixedPool.deallocate(obj1, sizeof(MyFixedSizeObject)); // Deallocate directly
+
+    MyFixedSizeObject* obj2 = myFixedPool.allocate<MyFixedSizeObject>();
+    new (obj2) MyFixedSizeObject(100, 100.0, "Direct2"); // Placement new
+    obj2->print();
+    myFixedPool.deallocate(obj2, sizeof(MyFixedSizeObject)); // Deallocate directly
+
+
+    // When objectsVector goes out of scope, its destructor will deallocate elements
+    // using MyFixedObjectAllocator, which returns memory to 'myFixedPool'.
+    // When 'myFixedPool' goes out of scope, it will release all the memory it holds back to the system.
+
+    return 0;
+
+```
 
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)
+- 
