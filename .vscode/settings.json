@@ -1,5 +1,7 @@
 {
     "cmake.sourceDirectory": "/home/prateek/Workspace/IntelTbb/ProTBB",
+    "C_Cpp.clang_format_style": "file",
+    "C_Cpp.clang_format_path": "/usr/bin/clang-format",
     "files.associations": {
         "algorithm": "cpp",
         "execution": "cpp",
@@ -91,5 +93,6 @@
         "__nullptr": "cpp",
         "__string": "cpp",
         "filesystem": "cpp"
-    }
+    },
+    "editor.defaultFormatter": null
 }

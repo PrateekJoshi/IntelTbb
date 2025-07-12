@@ -3,6 +3,8 @@ set(SOURCES
     2_allocator_benchmark
     3_malloc_profile
     4_malloc_profile
+    5_custom_new_delete
+    6_check_huge_pages_enabled
 )
 
 foreach(src ${SOURCES})
