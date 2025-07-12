@@ -1603,6 +1603,36 @@ int main() {
 
 ```
 
+---
+
+## Chapter 8 : Mapping Parallel Patterns to TBB
+
+### 🧠 Core Idea
+The chapter bridges parallel design patterns with their TBB implementations, emphasizing how reusable strategies can lead to scalable, maintainable, and efficient parallel programs.
+
+### 🔍 Design Spaces for Parallel Programming
+
+| **Design Space**           | **Purpose**                                                  |
+|----------------------------|--------------------------------------------------------------|
+| Finding Concurrency        | Identify parallelism in the problem domain                  |
+| Algorithm Structures       | Choose high-level patterns (e.g. map, reduce, pipeline)      |
+| Supporting Structures      | Manage shared data and organize parallel code                |
+| Implementation Mechanisms  | Handle threads and synchronization (mostly abstracted by TBB)|
+
+
+### 🔧 Patterns That Work (and Their TBB Counterparts)
+
+| **Pattern**                | **TBB Feature**                         | **Use Case**                                      |
+|---------------------------|-----------------------------------------|---------------------------------------------------|
+| Map                       | `parallel_for`                          | Apply function to each element                    |
+| Reduce / Scan             | `parallel_reduce`, `parallel_scan`      | Aggregate or prefix computations                  |
+| Divide-and-Conquer        | `task_group`, recursive `parallel_invoke` | Recursive algorithms (e.g. quicksort)          |
+| Pipeline                  | `parallel_pipeline`                     | Stream processing with filters                    |
+| Workpile                  | `flow::graph` with `continue_node`      | Dynamic task generation                           |
+| Fork-Join                 | `parallel_invoke`                       | Independent tasks executed concurrently           |
+| Event-Based Coordination  | `flow::graph` with `async_node`         | Reactive systems, I/O coordination                |
+| Nesting                   | Composing patterns hierarchically       | Modular parallelism                               |
+
 
 ## References 
 
