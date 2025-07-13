@@ -1,5 +1,7 @@
 # Pro TBB 
 
+❗❗❗ MAIN NOTES ARE HIGHLIGHTED IN BOOK ITSELF. THESE ARE ADDITIONAL NOTES.
+
 ## Preface 
 
 ### 🧠 Nested Parallelism: TBB vs. OpenMP
@@ -1728,6 +1730,162 @@ std::thread([] {
 
 But this bypasses TBB’s scheduler and may interfere with thread pool efficiency or NUMA locality.
 
+### 🔍 Key Differences: `g++` vs `icpx` for Linking TBB
+
+| **Feature**           | **G++ Compiler**                                                | **Intel icpx Compiler**                                                        |
+|-----------------------|------------------------------------------------------------------|---------------------------------------------------------------------------------|
+| **Compiler Ecosystem**| GNU toolchain, open-source                                      | Intel oneAPI, optimized for Intel hardware                                     |
+| **Standard Libraries**| `libstdc++` and other GNU libraries                             | Intel C++ runtime libraries, often highly optimized                            |
+| **Optimization**      | General-purpose optimizations                                   | Advanced, Intel-specific optimizations (e.g., vectorization, IPO)              |
+| **Ease of Linking**   | Requires explicit `-I` and `-L` flags (unless env vars are set) | Simpler when oneAPI environment is sourced; auto-detects TBB and dependencies  |
+| **Static Linking**    | Possible but more involved for all dependencies                 | `--static-intel` simplifies static linking of Intel libraries                  |
+| **Performance**       | Good general performance across architectures                   | Potentially superior on Intel CPUs due to low-level tuning and vector support  |
+
+#### 🧭 When to Choose Which Compiler
+
+##### 🟦 **G++**
+
+- ✅ Ideal for **maximum portability** across CPU architectures (x86, ARM, RISC-V, etc.)
+- ✅ Preferred if you're using a **GCC-based build system** or toolchain
+- ✅ Suited for **open-source projects** or environments where Intel compilers aren't available
+- ✅ Well-supported across platforms; easy integration with `libstdc++`, CMake, and Linux distros
+
+---
+
+##### 🟥 **Intel `icpx`**
+
+- 🚀 Best choice when targeting **Intel CPUs** and squeezing out **maximum performance**
+- 🚀 Integrates seamlessly with other **Intel oneAPI tools/libraries** (TBB, MKL, IPP)
+- 🚀 Enables deeper hardware optimization: AVX/AVX512, IPO, memory affinity, and cache-aware tuning
+- 🚀 Provides **rich diagnostics**, profiling hooks, and compatibility with VTune, Advisor, etc.
+
+--- 
+
+## Chapter 11 : Controlling the Number of Threads Used for Execution
+
+### The Architecture of the TBB task scheduler
+
+![](./img/3.png)
+
+#### 🧵 Application Thread
+
+- Think of this as the __main chef__ in your kitchen — the thread that starts your program.
+- It can do work itself or __delegate tasks__ to other helpers (TBB worker threads).
+
+#### 🏪 Global Thread Pool (Market)
+
+- This is like a __shared pool of sous-chefs__ waiting in the break room.
+- TBB creates this pool based on your CPU’s core count (usually one less than total cores).
+- These threads are __not tied to any specific task__ — they jump in wherever help is needed.
+
+#### 🏟️ Task Arena
+
+- Imagine dividing your kitchen into __stations__ (grill, pastry, prep).
+- A `task_arena` is one such station — a __logical space__ where tasks are scheduled.
+- You can control how many sous-chefs (threads) are allowed in each arena.
+- Useful for __isolating workloads__, setting priorities, or managing NUMA locality.
+
+#### 🧑‍🍳 Master Threads
+
+- These are __user-created threads__ (like your main chef or other chefs you hire).
+- When a master thread enters a `task_arena`, it can __submit tasks__ and even help execute them.
+- You can __reserve slots__ in the arena just for master threads using `reserved_for_masters`.
+
+#### 🔄 How It All Works Together
+
+1. Your __application thread__ creates a task_arena and submits tasks.
+2. TBB’s __global thread pool__ sends worker threads into the arena to help.
+3. If the arena runs out of work, those threads go back to the pool (market) to help elsewhere.
+4. __Master threads__ can also join the arena and participate in task execution.
+
+```
+[Application Thread] --> [Task Arena] <-- [Global Thread Pool]
+         |                     ↑
+         |                     |
+     [Master Threads] --------+
+
+```
+
+## Chapter 12 : Using Work Isolation for Correctness and Performance
+
+### ♻️ Work Isolation for Correctness
+
+```cpp
+tbb::spin_mutex m;
+
+tbb::parallel_for(0, N, [&](int i) {
+    tbb::spin_mutex::scoped_lock lock(m); // Lock acquired
+
+    // Nested parallel work while holding the lock
+    tbb::parallel_for(0, M, [&](int j) {
+        // Do some work
+    });
+
+    // Lock released when scope ends
+});
+```
+
+One Flow in the above code can lead to DEADLOCK !!!
+
+![](./img/4.png)
+
+![](./img/5.png)
+
+### Work Isolation Can Cause Its Own Correctness Issues!
+
+#### 🧠 What’s the Problem?
+
+Imagine you have a team of workers (threads), and you assign each of them a list of tasks (via `task_group`). You tell them:
+
+> “Go into your own private room (isolated region), spawn your tasks, and wait until they’re done.”
+
+But here’s the catch: once they’re inside their private rooms, they __can’t help each other__ — they’re isolated. So if all workers are waiting for tasks to finish, but __no one is allowed to execute those tasks__, the system deadlocks.
+
+#### 🧪 Simplified Code Example
+
+```cpp
+void splitRunAndWait() {
+    oneapi::tbb::task_group tg;
+    for (int i = 0; i < M; ++i) {
+        oneapi::tbb::this_task_arena::isolate([&] {
+            tg.run([] {
+                // Simulated work
+            });
+        });
+    }
+    tg.wait(); // Waits for all tasks
+}
+```
+
+✅ If splitRunAndWait() is called __outside__ of an isolated region, everything works fine. Threads can help each other finish tasks.
+
+❌ But if you do this:
+
+```cpp
+oneapi::tbb::this_task_arena::isolate([] {
+    splitRunAndWait(); // Now tg.wait() is inside isolation
+});
+```
+
+Now each thread is __trapped__ in its own isolated region, waiting for tasks that __no one is allowed to execute__ — because all threads are busy waiting.
+
+#### 🛠️ How to Fix It
+
+Move both `tg.run()` and `tg.wait()` into the same isolated region:
+
+```cpp
+oneapi::tbb::this_task_arena::isolate([] {
+    oneapi::tbb::task_group tg;
+    for (int i = 0; i < M; ++i) {
+        tg.run([] {
+            // Work
+        });
+    }
+    tg.wait(); // Safe: same region as spawn
+});
+```
+
+This way, threads can help execute tasks within their own isolated region and avoid deadlock.
 
 ## References 
 
