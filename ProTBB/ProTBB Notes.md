@@ -1634,6 +1634,101 @@ The chapter bridges parallel design patterns with their TBB implementations, emp
 | Nesting                   | Composing patterns hierarchically       | Modular parallelism                               |
 
 
+## Chapter 10 : Using Tasks to Create Your Own Algorithms
+
+### `tbb::task_group`
+
+It is a high-level construct in Intel oneTBB (Threading Building Blocks) that lets you launch and manage multiple parallel tasks in a structured way.
+
+#### 🛠️ Common Methods
+
+| Function      | Purpose                                                             | Syntax Example                         | Use Case Example                                                          |
+|---------------|----------------------------------------------------------------------|----------------------------------------|---------------------------------------------------------------------------|
+| `run_and_wait`| Runs a task and waits for all tasks in the group to finish or cancel| `tg.run_and_wait([]{ /* work */ });`   | Launch a task and block until all tasks complete or are canceled         |
+| `cancel`      | Attempts to cancel all tasks in the group                           | `tg.cancel();`                         | Stop execution early if a condition is met or an error occurs            |
+| `wait`        | Waits for all tasks in the group to finish or be canceled           | `tg.wait();`                           | Use after multiple `run()` calls to synchronize task completion          |
+
+
+#### 🧪 Code Examples
+
+1. `run_and_wait`
+
+```cpp
+int main() {
+    tbb::task_group tg;
+    tg.run_and_wait([] {
+        std::cout << "Running task...\n";
+    });
+    std::cout << "All tasks completed.\n";
+}
+```
+
+2. `cancel`
+
+```cpp
+int main() {
+    tbb::task_group tg;
+    tg.run([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::cout << "Task 1\n";
+    });
+    tg.run([&] {
+        tg.cancel(); // Cancel all tasks
+        std::cout << "Task 2 canceled others\n";
+    });
+    tg.wait();
+    std::cout << "Canceled or completed.\n";
+}
+```
+
+3. `wait`
+
+```cpp
+int main() {
+    tbb::task_group tg;
+    tg.run([] { std::cout << "Task A\n"; });
+    tg.run([] { std::cout << "Task B\n"; });
+    tg.wait(); // Wait for both tasks
+    std::cout << "All tasks done.\n";
+}
+```
+
+### Implementing fire and forget task using TBB
+
+✅ Use Case: Logging, telemetry, or speculative computation that doesn’t affect control flow.
+
+```cpp
+void background_task() {
+    std::cout << "Running background task...\n";
+    // Simulate work
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::cout << "Background task done.\n";
+}
+
+void fire_and_forget() {
+    static tbb::task_group tg; // Static to avoid premature destruction
+    tg.run([] { background_task(); }); // Launch task asynchronously
+    // No wait — fire and forget
+}
+```
+
+🧠 Important Notes
+
+- TBB tasks run on a shared thread pool, so fire-and-forget tasks won’t block your main thread.
+- If the `task_group` goes out of scope, tasks may be canceled — hence the use of `static` or external lifetime management.
+- You won’t get exceptions or results back — so make sure the task is __self-contained and failure-tolerant__.
+
+#### 🧪 Alternative: Detached std::thread
+
+```cpp
+std::thread([] {
+    background_task();
+}).detach();
+```
+
+But this bypasses TBB’s scheduler and may interfere with thread pool efficiency or NUMA locality.
+
+
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)
