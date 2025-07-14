@@ -1887,6 +1887,37 @@ oneapi::tbb::this_task_arena::isolate([] {
 
 This way, threads can help execute tasks within their own isolated region and avoid deadlock.
 
+## Chapter 15 : Cancellation and Exception Handling
+
+### ⚙️ Default Exception Handling in TBB
+
+- If a task throws an exception inside a TBB algorithm (e.g. `parallel_for`), TBB:
+  - Captures the exception
+  - Cancels the entire task group
+  - Propagates the exception to the calling thread once all tasks are cleaned up
+
+- Only the first thrown exception is propagated; others are suppressed.
+
+- TBB uses `tbb::captured_exception` or `std::exception_ptr` internally to manage cross-thread exception propagation3
+
+
+#### 🧪 Example: Catching Exceptions in parallel_for
+
+```cpp
+int main() {
+    std::vector<int> data(1000);
+    try {
+        tbb::parallel_for(0, 2000, [&](int i) {
+            data.at(i) += 1; // throws std::out_of_range
+        });
+    } catch (const std::out_of_range& ex) {
+        std::cout << "Caught exception: " << ex.what() << std::endl;
+    }
+}
+```
+
+This example throws `std::out_of_range` when accessing beyond the vector size. TBB cancels the rest of the tasks and rethrows the exception at the call site.
+
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)
