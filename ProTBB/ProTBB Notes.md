@@ -1918,6 +1918,436 @@ int main() {
 
 This example throws `std::out_of_range` when accessing beyond the vector size. TBB cancels the rest of the tasks and rethrows the exception at the call site.
 
+## Chapter 16 : Tuning TBB Algorithms: Granularity, Locality, Parallelism, and Determinism
+
+### 🧩 What Is a Range in TBB?
+
+A Range represents a portion of a problem domain that can be split and processed in parallel. It’s a lightweight abstraction that supports recursive decomposition.
+
+#### 🛠️ Core Requirements of a Range Class
+
+To be usable with TBB algorithms, a custom range class must implement:
+
+| Method                | Purpose                          |
+|-----------------------|----------------------------------|
+| `R::R(const R&)`      | Copy constructor                 |
+| `R::~R()`             | Destructor                       |
+| `bool R::is_divisible() const` | Indicates if the range can be split |
+| `bool R::empty() const`       | Indicates if the range is empty      |
+| `R::R(R& r, split)`   | Splitting constructor            |
+
+These allow TBB to recursively divide the range for parallel execution.
+
+#### 🔀 Splittable Concept
+
+A __splittable range__ supports a constructor like `R(R& r, split)` which divides `r` into two subranges:
+
+- One remains in `r`
+- The other is returned as the new object
+
+This enables __divide-and-conquer__ parallelism.
+
+#### 📦 Built-in Range Types
+
+Intel TBB provides several ready-to-use range types:
+
+| Type                          | Description                       |
+|-------------------------------|-----------------------------------|
+| `blocked_range<T>`            | 1D range over type `T`            |
+| `blocked_range2d<T1, T2>`     | 2D range for nested loops         |
+| `blocked_range3d<T1, T2, T3>` | 3D range for multidimensional data |
+
+These are templated and support grain size tuning for cache efficiency.
+
+#### ⚙️ Example: Using blocked_range
+
+```cpp
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
+
+void ParallelApplyFoo(float* a, size_t n) {
+    tbb::parallel_for(
+        tbb::blocked_range<size_t>(0, n, 64),
+        [=](const tbb::blocked_range<size_t>& r) {
+            for (size_t i = r.begin(); i != r.end(); ++i)
+                a[i] += 10;
+        }
+    );
+}
+```
+
+- `grain_size = 64` helps balance load and improve cache locality.
+- TBB automatically splits the range and schedules tasks.
+
+### 📊 Comparison of TBB Range Types
+
+| Range Type             | Dimensions | Template Parameters         | Use Case                            | Serial Equivalent                          |
+|------------------------|------------|-----------------------------|--------------------------------------|--------------------------------------------|
+| `blocked_range<T>`     | 1D         | `T`                         | Linear iteration (e.g., arrays)      | `for (T i = start; i < end; ++i)`          |
+| `blocked_range2d<T1,T2>`| 2D        | `T1`, `T2`                  | Nested loops (e.g., matrices)        | `for (T1 i) for (T2 j)`                     |
+| `blocked_range3d<T1,T2,T3>`| 3D     | `T1`, `T2`, `T3`            | 3D grids (e.g., tensors, volumes)    | `for (T1 i) for (T2 j) for (T3 k)`          |
+| `blocked_rangeNd<T,N>` | N-D        | `T`, `N`                    | Generic N-dimensional iteration      | `for (i0)...for(iN)`                        |
+
+#### 🧪 Basic Examples
+
+##### ✅ blocked_range<T>
+
+```cpp
+// Serial
+for (size_t i = 0; i < N; ++i) a[i] += 1;
+
+// TBB
+parallel_for(blocked_range<size_t>(0, N), [&](const blocked_range<size_t>& r) {
+    for (size_t i = r.begin(); i != r.end(); ++i) a[i] += 1;
+});
+```
+
+##### ✅ blocked_range2d<T1, T2>
+
+```cpp
+// Serial
+for (size_t i = 0; i < rows; ++i)
+    for (size_t j = 0; j < cols; ++j) matrix[i][j] += 1;
+
+// TBB
+parallel_for(blocked_range2d<size_t, size_t>(0, rows, 0, cols), [&](const blocked_range2d<size_t, size_t>& r) {
+    for (size_t i = r.rows().begin(); i != r.rows().end(); ++i)
+        for (size_t j = r.cols().begin(); j != r.cols().end(); ++j) matrix[i][j] += 1;
+});
+```
+
+##### ✅ blocked_range3d<T1, T2, T3>
+
+```cpp
+// Serial
+for (size_t i = 0; i < D1; ++i)
+    for (size_t j = 0; j < D2; ++j)
+        for (size_t k = 0; k < D3; ++k) tensor[i][j][k] += 1;
+
+// TBB
+parallel_for(blocked_range3d<size_t, size_t, size_t>(0, D1, 0, D2, 0, D3), [&](const blocked_range3d<size_t, size_t, size_t>& r) {
+    for (size_t i = r.pages().begin(); i != r.pages().end(); ++i)
+        for (size_t j = r.rows().begin(); j != r.rows().end(); ++j)
+            for (size_t k = r.cols().begin(); k != r.cols().end(); ++k) tensor[i][j][k] += 1;
+});
+```
+
+##### blocked_rangeNd<T, N>
+
+```cpp
+// Serial (4D example)
+for (int i = 0; i < D0; ++i)
+    for (int j = 0; j < D1; ++j)
+        for (int k = 0; k < D2; ++k)
+            for (int l = 0; l < D3; ++l) data[i][j][k][l] += 1;
+
+// TBB
+blocked_rangeNd<int, 4> r({D0, D1, D2, D3}, 4);
+parallel_for(r, [&](const blocked_rangeNd<int, 4>& r) {
+    for (int i = r.dim(0).begin(); i < r.dim(0).end(); ++i)
+        for (int j = r.dim(1).begin(); j < r.dim(1).end(); ++j)
+            for (int k = r.dim(2).begin(); k < r.dim(2).end(); ++k)
+                for (int l = r.dim(3).begin(); l < r.dim(3).end(); ++l) data[i][j][k][l] += 1;
+});
+```
+
+### 🧩 Simplified Intel TBB Partitioners Comparison
+
+| **Partitioner**         | **Description**                                                                 | **How It Splits Work**                                           | **Best Use Case**                                                           | **Example Usage**                                                                 |
+|------------------------|----------------------------------------------------------------------------------|------------------------------------------------------------------|------------------------------------------------------------------------------|----------------------------------------------------------------------------------|
+| `simple_partitioner`   | Splits work into chunks of roughly the size you specify (grain size).           | Fixed-size chunks, close to what you ask for.                    | When you want predictable chunk sizes for cache or memory control.          | `parallel_for(range, body, simple_partitioner());`                              |
+| `auto_partitioner`     | Automatically adjusts chunk sizes for better load balancing.                    | Starts with small chunks, then adapts based on workload.         | General-purpose; good for uneven or unpredictable workloads.                | `parallel_for(range, body);` or `parallel_for(range, body, auto_partitioner());` |
+| `static_partitioner`   | Divides work evenly among threads, no dynamic balancing.                        | Predefined chunks, same every time.                              | When you need repeatable execution or want to avoid runtime overhead.       | `parallel_for(range, body, static_partitioner());`                              |
+| `affinity_partitioner` | Remembers which thread worked on which chunk to reuse cache.                    | Adaptive chunks, but tries to keep same thread on same data.     | Repeated loops over same data; improves cache reuse and performance.        | `static affinity_partitioner ap; parallel_for(range, body, ap);`                |
+
+---
+
+#### 🔍 Visual Analogy
+
+Imagine you're dividing a pizza among friends:
+
+- **simple_partitioner**: You cut equal slices based on your knife size.
+- **auto_partitioner**: You start with small slices, then adjust based on how hungry each friend is.
+- **static_partitioner**: You pre-cut the pizza into equal slices and assign them before serving.
+- **affinity_partitioner**: You remember who got which slice last time and give them the same again for better satisfaction.
+
+### ⚠️ When `static_partitioner` Can Hurt Performance
+
+The `static_partitioner` in Intel TBB divides work **evenly and deterministically** across threads. It assumes:
+- All threads are equally fast
+- The workload is evenly distributed
+
+This works well **only** if:
+- The system is dedicated to one task
+- All cores are idle and equally available
+- The workload per iteration is uniform
+
+#### ❌ Case 1: Extra Thread on One Core
+
+Imagine you have 4 cores and TBB assigns 25% of the work to each. But one core is running an extra thread (e.g., OS task or background job). Now:
+
+- That core is **slower** than the others
+- But `static_partitioner` still gives it the same amount of work
+- Result: That core becomes a **bottleneck**, slowing down the whole job
+
+✅ Other partitioners like `auto_partitioner` and `affinity_partitioner` detect this imbalance and **rebalance** the work dynamically.
+
+#### ❌ Case 2: Uneven Workload Per Iteration
+
+Suppose you have a loop like this:
+
+```cpp
+for (int i = 0; i < N; ++i) {
+    do_work(i); // where work increases with i
+}
+```
+
+If `do_work(i)` takes more time as i increases, then:
+ - The thread that gets the last chunk (e.g., `i = 900 to 999`) has much more work
+ - The thread that gets `i = 0 to 99` finishes quickly and sits idle
+ - Again, imbalance leads to poor performance
+
+✅ `auto_partitioner` and `affinity_partitioner` can steal work from busy threads and redistribute it.
+
+
+#### 📊 Real Benchmark Result (Simplified)
+
+| Partitioner           | Extra Thread Impact | Uneven Work Impact   | Load Balancing        |
+|-----------------------|---------------------|-----------------------|------------------------|
+| `static_partitioner`  | ❌ Huge slowdown     | ❌ Poor performance   | ❌ None                |
+| `auto_partitioner`    | ✅ Minor slowdown    | ✅ Good performance   | ✅ Dynamic             |
+| `affinity_partitioner`| ✅ Minor slowdown    | ✅ Good performance   | ✅ With cache affinity |
+
+
+#### ✅ When to Use static_partitioner
+
+Use it only in High Performance Computing (HPC) environments where:
+ - You control all cores (no background tasks)
+ - Workload is perfectly balanced
+ - You want lowest overhead and repeatable scheduling
+
+Otherwise, prefer:
+ - `auto_partitioner` for general-purpose dynamic balancing
+ - `affinity_partitioner` for cache-friendly reuse
+
+
+### Extras : Loop Tiling in HPC ?
+
+Loop tiling, also known as **loop blocking**, is a performance optimization technique used to improve **cache locality** and **reduce memory access latency** in nested loops. It's especially effective in matrix operations and memory-bound computations.
+
+#### 🧠 Concept
+
+Loop tiling breaks a large iteration space into smaller chunks or **tiles**. These tiles are processed one at a time, allowing data to stay in the cache longer and be reused before eviction.
+
+---
+
+#### 🔍 Benefits
+
+- **Improves cache reuse**: Smaller blocks fit better in cache.
+- **Reduces cache misses**: Data accessed repeatedly stays in cache.
+- **Enhances performance**: Especially in memory-bound operations.
+
+---
+
+#### 📌 Example: Matrix Multiplication
+
+##### 🔴 Naive Version
+
+```cpp
+for (int i = 0; i < N; i++) {
+    for (int j = 0; j < N; j++) {
+        C[i][j] = 0;
+        for (int k = 0; k < N; k++) {
+            C[i][j] += A[i][k] * B[k][j];
+        }
+    }
+}
+```
+This version accesses rows of `A` and columns of `B` repeatedly, causing poor cache performance.
+
+##### 🟢 Tiled Version
+
+```cpp
+int TILE = 32; // tile size
+for (int ii = 0; ii < N; ii += TILE) {
+    for (int jj = 0; jj < N; jj += TILE) {
+        for (int kk = 0; kk < N; kk += TILE) {
+            for (int i = ii; i < ii + TILE; i++) {
+                for (int j = jj; j < jj + TILE; j++) {
+                    for (int k = kk; k < kk + TILE; k++) {
+                        C[i][j] += A[i][k] * B[k][j];
+                    }
+                }
+            }
+        }
+    }
+}
+```
+This version computes on `TILE × TILE` blocks, improving cache locality by working on smaller chunks of data.
+
+#### 🧪 Real-World Impact
+
+In HPC workloads, tiling can lead to __2× to 10× speedups__ depending on _cache size_ and access patterns.
+
+Widely used in:
+ - BLAS libraries
+ - GPU kernels
+ - Compiler optimizations
+
+### 🚀 Understanding TBB Pipeline Performance in Simple Terms
+
+#### 🧠 Task Size Rule of Thumb
+
+TBB works best when each task takes **at least 1 microsecond** to run. This helps hide the cost of scheduling and task management.
+
+---
+
+##### 🧪 Case 1: One Token in the Pipeline
+
+- A **token** represents an item moving through the pipeline.
+- If you use **only one token**, only one item is processed at a time.
+- Even if filters are marked as `parallel`, the pipeline behaves **serially**.
+- Result: You get **no parallelism**, just overhead from TBB managing the pipeline.
+
+#### ✅ Good News
+
+If each filter takes ~1 microsecond, the overhead is small. The performance is **almost as good as a plain serial loop**.
+
+---
+
+###### 🧪 Case 2: Multiple Filters and Tokens
+
+#### 🔹 Serial Pipeline
+
+- Filters run one after another.
+- Parallelism comes from **different filters working on different items**.
+- Speedup depends on the **number of filters**, not the size of the dataset.
+
+#### 🔹 Parallel Filters
+
+- Filters can process **multiple items at once**.
+- If your system has 8 threads and you use 8 tokens, you can get up to **8× speedup**.
+- Even with **one filter**, you get parallelism because multiple items are processed simultaneously.
+
+---
+
+##### 📈 Case 3: Varying Number of Tokens
+
+- If you use **fewer than 8 tokens** on an 8-thread system:
+  - Not all threads are busy.
+  - You lose potential parallelism.
+- Once you reach **8 tokens**, all threads can work.
+- Adding **more than 8 tokens** doesn’t help much—it just adds memory pressure.
+
+---
+
+#### ✅ Summary
+
+| Scenario                      | Behavior                          | Performance Impact         |
+|------------------------------|-----------------------------------|----------------------------|
+| 1 token                      | Serial execution                  | Low parallelism, low overhead |
+| Filters < Threads            | Underutilized threads             | Suboptimal speedup         |
+| Filters = Threads            | Full parallelism                  | Maximum speedup            |
+| Tokens < Threads             | Not enough items in flight        | Threads idle               |
+| Tokens ≥ Threads             | Full pipeline utilization         | Best performance           |
+
+---
+
+#### 💡 Takeaway
+
+- Use **at least 1μs of work per filter** to avoid overhead.
+- Use **parallel filters** and **enough tokens** to keep all threads busy.
+- Pipelines don’t scale with dataset size like `parallel_for`—they scale with **filter count and token count**.
+
+### 🗜️ Understanding an Imbalanced Pipeline
+
+#### 🧠 What’s Happening
+
+- You have a pipeline with 8 filters.
+- All filters do equal work (spin_time) except one, which does more work (spin_time × imbalance).
+- This creates a bottleneck in the pipeline.
+
+#### 🐢 Serial Pipeline Behavior
+
+- In serial mode, the slowest filter limits the speed.
+- Total time = N × max(spin_time, spin_time × imbalance)
+- So, even if other filters are fast, the slow one drags everything down.
+- The maximum speedup is limited by how much work is done vs. the slowest stage.
+
+#### 🚀 Parallel Pipeline Behavior
+
+- TBB’s parallel pipeline can overlap multiple instances of the slow filter.
+- This avoids the bottleneck—up to the number of available threads.
+- On an 8-thread system, you can overlap 8 slow filters at most.
+- Adding more tokens beyond 8 doesn’t help—threads are already saturated.
+
+#### ⚠️ Token Count Matters
+
+- If you use too few tokens, not all threads stay busy.
+- This hurts performance, especially when filters are uneven or serial.
+- But once you reach the number of threads, adding more tokens gives diminishing returns.
+
+#### ✅ Final Takeaway
+
+- Imbalanced filters slow down serial pipelines.
+- Parallel pipelines can hide imbalance—up to thread limits.
+- Token count must be tuned carefully to keep all threads busy.
+- TBB’s distributed work-stealing gives near-ideal performance without centralized bottlenecks.
+
+### 🧠 TBB Pipelines, Data Locality, and Thread Affinity — Simplified
+
+#### ✅ Good News: Built-in Locality
+
+Unlike TBB loop algorithms (which let you use `affinity_partitioner` or `static_partitioner` to improve cache usage), **TBB pipelines don’t offer explicit cache tuning options**. But they still **preserve data locality automatically**.
+
+#### 🔄 How It Works
+
+- When a thread finishes processing a filter (say `f0`), it **immediately tries to run the next filter (`f1`)** on the same item.
+- This keeps the data on the **same core**, improving cache reuse.
+- If `f1` is busy or has strict ordering rules, the item is buffered and the thread looks for other work.
+
+---
+
+#### 🔁 Task Recycling = Better Locality
+
+- Each filter is run as a **task**.
+- When `f0` finishes, it **recycles itself** into a task for `f1`.
+- This avoids going back to the scheduler and keeps execution on the **same thread/core**.
+
+#### 🚫 What Naive Pipelines Do
+
+- A naive pipeline would enqueue the item from `f0` into `f1`’s queue.
+- That item might get picked up by a **different thread**, hurting cache performance.
+
+---
+
+#### 📉 Queue Size and Memory Usage
+
+- TBB prefers finishing items already in progress before starting new ones.
+- This reduces the number of items waiting in queues, saving memory.
+
+---
+
+#### ⚠️ Limitations
+
+- TBB pipelines **don’t support affinity hints** like loop algorithms do.
+- You **can’t specify** which thread should run a filter.
+- There is a workaround: `thread_bound_filter`, which **binds a filter to a specific thread**.
+  - But it requires using the **low-level `tbb::pipeline` API**, which is **less safe and harder to use**.
+
+---
+
+#### 💡 Summary
+
+| Feature                     | TBB Loop Algorithms | TBB Pipelines         |
+|----------------------------|---------------------|------------------------|
+| Cache tuning options       | ✅ Yes (`affinity_partitioner`) | ❌ No explicit options |
+| Automatic data locality    | ⚠️ Depends on partitioner | ✅ Built-in behavior   |
+| Thread affinity hints      | ✅ Supported         | ❌ Not supported        |
+| Hard affinity workaround   | ❌ Not needed        | ✅ `thread_bound_filter` (advanced) |
+
+
+
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)
