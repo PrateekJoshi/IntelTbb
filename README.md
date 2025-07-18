@@ -12,10 +12,10 @@ sudo apt install libtbb-dev
 
 ## Tutorials 
 
+[oneAPI Basics | Intel Software](https://www.youtube.com/playlist?list=PLg-UKERBljNxsCltpcXU_Haz9xQSCN_SB)
+
+[📺 Intel VTune Profiler Training Playlist on YouTube](https://copilot.microsoft.com/chats/vq4EPXo4R1mEBGkUQULSZ)
+
+[HPC Wiki VTune Tutorial](https://hpc-wiki.info/hpc/Intel_VTune_Tutorial)
+
 [IQ95 The Homo Siliconiens Intel TBB Videos](https://www.youtube.com/playlist?list=PL1_C6uWTeBDHMqioaL1yQ_B0fi7uzxIPB)
-
-Hello, 
-
-Thank you for sending the invite. To discuss further, can you please send your biodata ( with horscope deatils ) for kundli matching to my mother via WhatsApp ? Her contact number number is 7042381682 (Hema Joshi). 
-
-Thank You

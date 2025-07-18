@@ -2346,7 +2346,7 @@ Unlike TBB loop algorithms (which let you use `affinity_partitioner` or `static_
 | Thread affinity hints      | ✅ Supported         | ❌ Not supported        |
 | Hard affinity workaround   | ❌ Not needed        | ✅ `thread_bound_filter` (advanced) |
 
-
+## Chapter 17 : Flow Graphs: Beyond the Basics
 
 ## References 
 
