@@ -1,3 +1,15 @@
+
+## Install Dependencies
+
+```sh
+# Install TBB 
+sudo apt install libtbb-dev
+# OpenCL
+sudo apt install ocl-icd-opencl-dev clinfo
+# Test OpenCL is able to detect device 
+clinfo
+```
+
 ## Build 
 
 ```

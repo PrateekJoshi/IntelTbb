@@ -2542,6 +2542,281 @@ Traditional nodes like `function_node` assume __synchronous execution__ —they 
 - Graphics: Launch OpenCL or CUDA kernels and continue graph execution when done
 - Streaming systems: Buffer and process data from external feeds asynchronously
 
+### CUDA vs OpenCL vs Thrust vs SYCL
+
+| Feature             | CUDA 🚀                                       | OpenCL 🌐                                  | Thrust ⚡ (NVIDIA)                              | SYCL ✨                                        |
+| :------------------ | :-------------------------------------------- | :----------------------------------------- | :---------------------------------------------- | :--------------------------------------------- |
+| **Vendor Specificity** | NVIDIA GPUs only                             | Vendor-agnostic (NVIDIA, AMD, Intel, etc.) | NVIDIA GPUs only (built on CUDA)                | Vendor-agnostic (NVIDIA, AMD, Intel, FPGAs, CPUs) |
+| **Level of Abstraction** | Low-level (direct GPU programming via C/C++) | Low-level (C99-based kernels)               | High-level (C++ STL-like algorithms & data structures) | High-level (Modern C++17 eDSL)                |
+| **Ease of Use** | More complex, requires specific GPU knowledge | More complex, requires heterogeneous knowledge | Easier for common parallel patterns, familiar C++ STL | Easier than OpenCL/raw CUDA, pure C++          |
+| **Performance** | Generally highest on NVIDIA hardware (native) | Can be slightly slower due to generality and runtime compilation, but good | High performance for common algorithms, leverages CUDA | Highly performant, often comparable to native APIs (e.g., CUDA) with proper tuning |
+| **Ecosystem & Tools** | Very mature, extensive libraries (cuBLAS, cuFFT, cuDNN), profilers, debuggers | Growing, but less unified tooling and fewer high-level libraries built directly on it | Integrated within CUDA ecosystem, excellent for productivity | Growing rapidly, part of oneAPI, good compiler support (DPC++, AdaptiveCpp) and interoperability tools |
+| **Programming Language** | C, C++, Fortran (with extensions), Python, Julia | C99 (for kernels), C++ for host code         | C++ templates                                   | Pure C++17 (single-source)                   |
+| **Primary Goal** | Maximize performance on NVIDIA GPUs           | Maximize portability across diverse hardware | Maximize developer productivity and leverage common parallel patterns on NVIDIA GPUs | Maximize portability and productivity with modern C++ for heterogeneous systems |
+| **Key Advantage** | Peak performance, vast ecosystem for NVIDIA | Wide hardware compatibility, open standard  | Simplifies GPU programming, fast development on NVIDIA | Single-source C++, vendor-agnostic, excellent for modern C++ development |
+| **Consideration** | Vendor lock-in 🔒                             | Can involve more low-level coding for performance tuning | NVIDIA-specific 🎯, not a standalone framework | Still evolving, requires a SYCL implementation (e.g., DPC++) for specific hardware |
+
+## Chapter 20 : TBB on NUMA Architecture
+
+Intel's oneAPI Threading Building Blocks (TBB) offers __partial support__ for NUMA (Non-Uniform Memory Access) systems. While TBB doesn't automatically optimize for NUMA locality, it provides tools that allow developers to __manually guide task placement and memory affinity__ to improve performance on NUMA architectures.
+
+### 🔍 Key Features for NUMA Optimization in oneAPI TBB
+
+__`tbb::info::numa_nodes()`__
+ - Returns a list of available NUMA node IDs on the system.
+ - Useful for discovering system topology.
+
+__`tbb::task_arena::constraints`(numa_node_id)__
+ - Allows creation of task arenas bound to specific NUMA nodes.
+ - Ensures tasks run on cores within the specified NUMA domain.
+
+__`tbb::task_group`__
+- Enables asynchronous task execution within a NUMA-aware arena.
+
+__`tbb::task_arena::enqueue()`__
+- Non-blocking way to schedule tasks in a NUMA-specific arena.
+
+__`tbb::affinity_partitioner`__
+- Remembers where iterations ran previously and tries to keep them on the same thread.
+- Helps with cache and memory locality.
+
+__`Integration with `hwloc` library`__
+- For advanced control over memory placement and processor affinity.
+- Not part of TBB itself but commonly used alongside it.
+
+### 🧪 Example: NUMA-Aware Parallel For
+
+```cpp
+void numa_aware_parallel_for() {
+    std::vector<tbb::numa_node_id> numa_nodes = tbb::info::numa_nodes();
+    std::vector<tbb::task_arena> arenas;
+
+    for (auto node : numa_nodes) {
+        arenas.emplace_back(tbb::task_arena::constraints(node));
+    }
+
+    std::size_t size = 1000000;
+    std::vector<int> data(size, 1);
+
+    for (std::size_t i = 0; i < numa_nodes.size(); ++i) {
+        std::size_t chunk_start = i * size / numa_nodes.size();
+        std::size_t chunk_end = (i + 1) * size / numa_nodes.size();
+
+        arenas[i].enqueue([=, &data] {
+            tbb::parallel_for(chunk_start, chunk_end, [&](std::size_t j) {
+                data[j] *= 2;
+            });
+        });
+    }
+
+    for (auto& arena : arenas) {
+        arena.execute([] {}); // Wait for tasks to complete
+    }
+
+    std::cout << "NUMA-aware processing complete.\n";
+}
+```
+
+⚠️ Limitations
+- TBB does not automatically pin threads to NUMA nodes.
+- You must explicitly manage memory placement for optimal performance.
+- Performance gains depend heavily on workload characteristics and system topology.
+
+### 📊  hwloc vs LIKWID: Feature Comparison and Usage
+
+| Feature / Capability              | `hwloc`                                                               | `LIKWID`                                                                  |
+|----------------------------------|------------------------------------------------------------------------|---------------------------------------------------------------------------|
+| **Primary Purpose**              | Hardware topology discovery and binding tools                         | Performance analysis, thread affinity, and benchmarking tools             |
+| **Topology Awareness**           | Deep hierarchy: NUMA nodes, sockets, cores, caches, I/O               | Basic topology via `likwid-topology`                                      |
+| **NUMA Support**                 | Yes – topology, binding, and locality tools                           | Yes – shows domains and memory regions                                    |
+| **Thread Affinity Control**      | Yes – via `hwloc-bind`, `hwloc-calc`, etc.                            | Yes – via `likwid-pin`, `likwid-mpirun`                                   |
+| **Performance Counters**        | ❌ No built-in counters                                                | ✅ Yes – through `likwid-perfctr`                                          |
+| **Benchmarking Utilities**      | ❌ None built-in                                                       | ✅ Yes – `likwid-bench` for microbenchmarks                                |
+| **Power/Energy Monitoring**     | Limited (external integration only)                                   | ✅ Yes – `likwid-powermeter` using RAPL                                    |
+| **GPU Awareness**               | ✅ Detects GPUs and I/O hierarchy                                      | ✅ Basic GPU support (Nvidia, AMD)                                         |
+| **Programming API**             | Rich C API for traversal and manipulation                             | Marker API for custom instrumentation                                     |
+| **Visualization**               | Graphical (`lstopo`) and textual output                               | Textual with ASCII diagrams                                               |
+| **Integration with Other Tools**| Widely used in OpenMP/MPI runtimes                                    | CLI tools, MPI/OpenMP integration                                         |
+| **Architecture Support**        | Cross-platform: x86, ARM, POWER, etc.                                 | Mostly x86, ARMv8, POWER9, GPUs                                           |
+| **Installation**                | Via package manager or source                                         | Mostly source-based; some packages available                              |
+
+#### 🧪 Usage Examples
+
+🔹 __`hwloc` Example: Show NUMA Topology__
+
+```sh
+lstopo --no-io
+```
+
+Displays a tree of NUMA nodes, sockets, cores, and caches.
+
+🔹 __`LIKWID` Example: Pin Threads to NUMA Domain__
+
+```sh
+likwid-pin -c M0:0-3 ./my_app
+```
+Pins threads to cores 0–3 in NUMA domain 0.
+
+🔹 __`LIKWID` Example: Measure Memory Bandwidth__
+
+```sh
+likwid-perfctr -C 0-3 -g MEM ./my_app
+```
+Measures memory bandwidth on cores 0–3 using the MEM performance group.
+
+### 🧪 What Is likwid-bench?
+
+`likwid-bench` is a __microbenchmarking framework__ that helps you measure performance of low-level operations like memory bandwidth, cache behavior, and arithmetic throughput. It uses __assembly kernels__ to simulate real workloads and lets you control:
+- Thread placement (affinity)
+- Memory allocation (NUMA domains)
+- Vector sizes and data types
+
+#### ⚙️ Basic Command Structure
+
+```sh
+likwid-bench -t <benchmark_kernel> -w <workgroup_config>
+```
+- `-t` : Specifies the benchmark kernel (e.g. stream, copy, triad)
+- `-w` : Defines thread placement, memory size, and NUMA domain
+
+#### 📋 Example 1: Run STREAM Benchmark Locally
+
+```sh
+likwid-bench -t stream -i 1 -w S0:12GB:16-0:S0,1:S0,2:S0
+```
+
+Breakdown:
+- `-t stream`: Runs the STREAM triad benchmark (`C[i] = A[i] + alpha * B[i]`)
+- `-i 1`: One iteration
+- `-w S0:12GB:16-0:S0,1:S0,2:S0:`
+ - Threads pinned to NUMA node 0 (S0)
+ - 12 GB total memory (4 GB per array)
+ - 16 threads
+ - All arrays allocated on NUMA node 0
+
+📈 Result: High bandwidth (e.g. 8219 MB/s) due to NUMA locality.
+
+#### 📋 Example 2: Run STREAM Benchmark with Remote Memory
+
+```sh
+likwid-bench -t stream -i 1 -w S0:12GB:16-0:S1,1:S1,2:S1
+```
+Breakdown:
+- Same thread placement as before (NUMA node 0)
+- Arrays allocated on NUMA node 1 (`S1`)
+
+📉 Result: Lower bandwidth (e.g. 5110 MB/s) due to nonlocal memory access.
+
+## Using `hwloc` library to allocate memory and bind threads to each NUMA node on your system: 
+
+🧠 What This Code Does
+- Initializes the hardware topology
+- Iterates over available NUMA nodes
+- Allocates memory on each node
+- Binds a thread to the corresponding node
+- Prints confirmation for each step
+
+### 🧪 Example Code
+
+```cpp
+/*
+🧩 Notes
+This example assumes your system has multiple NUMA nodes.
+You’ll need to link with -lhwloc -lpthread when compiling.
+Memory is allocated and freed within each thread to ensure locality.
+
+O/P:
+Thread 0 bound to NUMA node 0, memory allocated at 0x55a1c3f4e000
+Thread 1 bound to NUMA node 1, memory allocated at 0x55a1c404f000
+
+*/
+#include <hwloc.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define MEM_SIZE (1024 * 1024) // 1 MB
+
+typedef struct {
+    hwloc_topology_t topology;
+    hwloc_obj_t node;
+    int node_index;
+} thread_data_t;
+
+void* thread_func(void* arg) {
+    thread_data_t* data = (thread_data_t*)arg;
+
+    // Bind thread to NUMA node
+    hwloc_set_cpubind(data->topology, data->node->cpuset, HWLOC_CPUBIND_THREAD);
+
+    // Allocate memory on the NUMA node
+    void* mem = hwloc_alloc_membind(data->topology, MEM_SIZE,
+                                    data->node->nodeset,
+                                    HWLOC_MEMBIND_BIND,
+                                    HWLOC_MEMBIND_BYNODESET);
+
+    if (mem) {
+        printf("Thread %d bound to NUMA node %d, memory allocated at %p\n",
+               data->node_index, data->node->os_index, mem);
+        hwloc_free(data->topology, mem, MEM_SIZE);
+    } else {
+        perror("Memory allocation failed");
+    }
+
+    return NULL;
+}
+
+int main() {
+    hwloc_topology_t topology;
+    hwloc_topology_init(&topology);
+    hwloc_topology_load(topology);
+
+    int num_nodes = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NUMANODE);
+    pthread_t threads[num_nodes];
+    thread_data_t thread_data[num_nodes];
+
+    for (int i = 0; i < num_nodes; ++i) {
+        hwloc_obj_t node = hwloc_get_obj_by_type(topology, HWLOC_OBJ_NUMANODE, i);
+        thread_data[i] = (thread_data_t){topology, node, i};
+        pthread_create(&threads[i], NULL, thread_func, &thread_data[i]);
+    }
+
+    for (int i = 0; i < num_nodes; ++i) {
+        pthread_join(threads[i], NULL);
+    }
+
+    hwloc_topology_destroy(topology);
+    return 0;
+}
+```
+
+## Appendix
+
+### 🧠 Intel TBB Debug Macros
+
+| **Macro**                      | **Description**                                                                  | **Typical Value**              |
+|-------------------------------|------------------------------------------------------------------------------------|--------------------------------|
+| `TBB_USE_DEBUG`               | Enables use of TBB debug libraries and internal checks                            | `1` (enabled) / `0` (disabled) |
+| `TBB_USE_ASSERT`              | Activates internal assertions for debugging                                       | `1` (enabled) / `0` (disabled) |
+| `TBB_USE_THREADING_TOOLS`     | Enables integration with Intel Inspector and other threading tools                | `1` (enabled) / `0` (disabled) |
+| `TBB_USE_PERFORMANCE_WARNINGS`| Shows warnings about potential performance issues (e.g., contention)              | `1` (enabled) / `0` (disabled) |
+| `TBB_IMPLEMENT_CPP0X`         | Enables C++11 features in TBB (deprecated in newer versions)                      | `1` (enabled) / `0` (disabled) |
+| `TBB_DEPRECATED`              | Controls visibility of deprecated APIs                                            | `1` (show deprecated) / `0` (hide deprecated) |
+| `TBB_VERSION`                 | Displays the current version of TBB                                               | e.g., `2021.5.0`               |
+| `TBB_INTERFACE_VERSION`       | Internal version number used for compatibility checks                             | e.g., `12000`                  |
+
+---
+
+#### 🛠️ Usage Tips
+
+- Always define macros **before including TBB headers**.
+- You can pass them as compiler flags:
+
+```bash
+-D TBB_USE_DEBUG=1
+```
+
+
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)
