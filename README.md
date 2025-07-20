@@ -10,6 +10,8 @@ sudo apt install libtbb-dev
 
 [Expressing Parallelism in C++ with Threading Building Blocks](https://www.youtube.com/watch?v=9Otq_fcUnPE)
 
+[Visualizing Performance - The Developers’ Guide to Flame Graphs • Brendan Gregg • YOW! 2022](https://www.youtube.com/watch?v=VMpTU15rIZY)
+
 ## Tutorials 
 
 [oneAPI Basics | Intel Software](https://www.youtube.com/playlist?list=PLg-UKERBljNxsCltpcXU_Haz9xQSCN_SB)

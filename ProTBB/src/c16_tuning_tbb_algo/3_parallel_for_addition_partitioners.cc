@@ -46,9 +46,9 @@ int main(int argc, char *argv[])
   // and only 1 thread per core
   tbb::task_arena::constraints c;
   c.set_numa_id(tbb::info::numa_nodes()[0]);
-  c.set_core_type(tbb::info::core_types().back());
-  c.set_max_threads_per_core(1);
-  c.set_max_concurrency(std::min(8, tbb::info::default_concurrency(c)));
+  // c.set_core_type(tbb::info::core_types().back());
+  // c.set_max_threads_per_core(1);
+  // c.set_max_concurrency(std::min(8, tbb::info::default_concurrency(c)));
   tbb::task_arena arena(c);
 
   std::cout << "Using an arena with " << arena.max_concurrency() << " slots\n";

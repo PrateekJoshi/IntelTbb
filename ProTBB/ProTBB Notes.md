@@ -2348,6 +2348,167 @@ Unlike TBB loop algorithms (which let you use `affinity_partitioner` or `static_
 
 ## Chapter 17 : Flow Graphs: Beyond the Basics
 
+### ⚙️ Three common approaches to managing resource consumption in a flow graph: 
+
+
+| **Approach**         | **Scope of Control**   | **Best For**                          |
+|----------------------|------------------------|----------------------------------------|
+| `limiter_node`       | Subgraph-wide          | Limiting total in-flight tasks         |
+| Concurrency limits   | Per-node               | Restricting parallel execution         |
+| Token-passing        | Fine-grained, reusable | Managing shared resources              |
+
+
+#### 🧱 1. Using limiter_node
+
+A `limiter_node` restricts how many messages can pass through a point in the graph. It’s great for controlling the number of tasks in-flight across a subgraph.
+
+```cpp
+tbb::flow::graph g;
+tbb::flow::limiter_node<int> limiter(g, 3); // Allow max 3 messages
+
+tbb::flow::function_node<int, int> worker(g, tbb::flow::unlimited, [](int x) {
+    std::cout << "Processing " << x << std::endl;
+    return x;
+});
+
+tbb::flow::make_edge(limiter, worker);
+tbb::flow::make_edge(worker, limiter.decrementer()); // Allow new messages after processing
+
+limiter.try_put(1);
+limiter.try_put(2);
+limiter.try_put(3);
+limiter.try_put(4); // Will be blocked until one of the first 3 is processed
+
+g.wait_for_all();
+```
+
+🧠 How it works:
+
+- Only 3 messages are allowed through at a time.
+- Once a message is processed, the `decrementer()` allows another to pass.
+- This limits concurrency across the entire subgraph.
+
+#### ⚙️ 2. Using Concurrency Limits
+
+You can set a concurrency limit on nodes like `function_node` or `multifunction_node` to restrict how many tasks run in parallel.
+
+```cpp
+tbb::flow::graph g;
+
+tbb::flow::function_node<int, int> limited_node(g, 2, [](int x) {
+    std::cout << "Limited processing " << x << std::endl;
+    return x;
+});
+
+limited_node.try_put(1);
+limited_node.try_put(2);
+limited_node.try_put(3); // Will wait until one of the first two finishes
+
+g.wait_for_all();
+```
+
+🧠 __How it works__:
+- Only 2 tasks can run concurrently.
+- Excess messages are queued until a slot opens.
+- Helps prevent CPU overload or memory spikes.
+
+#### 🔄 3. Using Token-Passing Pattern
+
+- This pattern uses a `join_node` with a reserving policy and a pool of tokens to control how many messages are processed.
+
+- The token-passing pattern is used to limit concurrency across a flow graph. Instead of letting every input message flow freely, we pair each input with a token—like a permission slip. Only when a token is available can a message be processed.
+
+- Think of it like a restaurant with limited tables:
+ - Customers (input messages) wait at the door.
+ - Tokens (tables) are handed out.
+ - When a customer finishes eating, the table (token) is returned and reused.
+
+```cpp
+tbb::flow::graph g;
+
+tbb::flow::buffer_node<int> token_buffer(g);
+tbb::flow::input_node<int> source(g, [](tbb::flow_control& fc) -> int {
+    static int i = 0;
+    if (i < 5) return i++;
+    else { fc.stop(); return -1; }
+});
+
+tbb::flow::join_node<std::tuple<int, int>, tbb::flow::reserving> join(g);
+tbb::flow::function_node<std::tuple<int, int>, tbb::flow::continue_msg> processor(
+    g, tbb::flow::unlimited, [](const std::tuple<int, int>& t) {
+        std::cout << "Processing " << std::get<0>(t) << " with token " << std::get<1>(t) << std::endl;
+        return tbb::flow::continue_msg();
+    });
+
+// 🔗 Connections:
+tbb::flow::make_edge(source, tbb::flow::input_port<0>(join));
+tbb::flow::make_edge(token_buffer, tbb::flow::input_port<1>(join));
+tbb::flow::make_edge(join, processor);
+
+//🔁 Token Recycling:
+tbb::flow::make_edge(processor, token_buffer); // Return token after processing
+
+// Preload tokens
+token_buffer.try_put(100);
+token_buffer.try_put(101);
+token_buffer.try_put(102);
+
+source.activate();
+g.wait_for_all();
+```
+
+🧠 __How It Works__
+
+1. Tokens are preloaded into `token_buffer`:
+
+```cpp
+token_buffer.try_put(100);
+token_buffer.try_put(101);
+token_buffer.try_put(102);
+```
+2. `join_node` (with reserving policy) waits until it can reserve:
+ - One input from `source`
+ - One token from `token_buffer`
+
+3. Once both are available, it creates a tuple and sends it to `processor`.
+
+4. After processing, the token is returned to `token_buffer`, allowing another input to proceed.
+
+##### 🧪 Visual Analogy: Token-Passing in TBB Flow Graph
+
+| **Component**        | **Analogy**                        |
+|----------------------|------------------------------------|
+| `source`             | Customers arriving                 |
+| `token_buffer`       | Available tables                   |
+| `join_node`          | Host pairing customer + table      |
+| `processor`          | Dining experience                  |
+| `make_edge back`     | Table returned after meal          |
+
+### QnA 
+
+__Q)__ If I have 4 logical cores in machines and I create 2 flow graph instance : 
+1) Then in global tbb thread pool how many threads will be created ? 
+2) Since we will have 2 task arena, ie 8 slots total, how many slots can be running at max ? 8 possibe ? any oversubscription possible ?
+
+__Answer__ 
+
+__🧠 1. Global Thread Pool Size with 4 Logical Cores__
+
+- By default, TBB creates `P - 1` __worker threads__, where P is the number of logical cores. On a 4-core machine, TBB initializes 3 worker threads
+- Even if you create __multiple flow graphs or task arenas__, TBB __does not spawn more threads__ unless you explicitly override the limit using `tbb::global_control`.
+
+> 📌 So the global thread pool remains at 3 worker threads, shared across all arenas and graphs.
+
+
+__🧩 2. Two Task Arenas with 4 Slots Each = 8 Slots Total__
+
+Yes, each task_arena can be configured with its own slot count (e.g., 4 slots per arena). But here’s the catch:
+- `Slots ≠ Threads — slots are places where threads can work, not actual threads
+- TBB __dynamically assigns threads__ from the global pool to fill slots __based on demand and availability__
+- If both arenas are active, TBB will __share the 3 worker threads__ across the 8 slots
+
+> 🧠 No oversubscription happens unless you explicitly increase the thread pool size using `tbb::global_control`.
+
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)
