@@ -2509,6 +2509,39 @@ Yes, each task_arena can be configured with its own slot count (e.g., 4 slots pe
 
 > 🧠 No oversubscription happens unless you explicitly increase the thread pool size using `tbb::global_control`.
 
+## Chapter 18 : Async Nodes
+
+Intel TBB’s async_node is a powerful addition to the Flow Graph API that enables __integration with asynchronous activities__—like GPU kernels, I/O operations, network calls, or external threads—without blocking the flow graph.
+
+### ⚙️ Features of async_node
+
+| **Feature**                  | **Description**                                                                 |
+|-----------------------------|----------------------------------------------------------------------------------|
+| 🧵 Non-blocking execution     | Allows offloading work to external threads or devices without blocking the graph |
+| 🔁 Gateway interface         | Uses `gateway.try_put()` and `gateway.reserve_wait()` to inject results back into the graph |
+| 🎛️ Concurrency control       | Supports `serial`, `unlimited`, or fixed concurrency levels                      |
+| 🧩 Flexible I/O types        | Template-based: `async_node<Input, Output>`                                     |
+| 🌐 External coordination     | Ideal for integrating with MPI, OpenCL, CUDA, or custom async systems            |
+| 🧠 Graph-aware lifecycle     | Ensures `wait_for_all()` accounts for async tasks via `reserve_wait()` / `release_wait()` |
+
+
+### 🧠 Why Was async_node Needed?
+
+Traditional nodes like `function_node` assume __synchronous execution__ —they process input and immediately return output. But modern applications often need to:
+ - Offload computation to accelerators (GPU, FPGA, etc.)
+ - Perform I/O (e.g., logging, file writes, network requests)
+ - Wait for external events (e.g., sensor data, user input)
+ - Integrate with other runtimes (e.g., ROS, OpenCL, MPI)
+
+> 🧪 With async_node, you can offload work and reinject results into the graph when ready—preserving the flow graph’s structure and synchronization.
+
+### 📦 Real-World Use Cases
+
+- Robotics: Integrate sensor callbacks from ROS into a TBB graph
+- HPC: Dispatch tasks to MPI ranks or coprocessors and collect results
+- Graphics: Launch OpenCL or CUDA kernels and continue graph execution when done
+- Streaming systems: Buffer and process data from external feeds asynchronously
+
 ## References 
 
 - [ All of the code examples used in this book are available ](https://github.com/Apress/pro-TBB)
