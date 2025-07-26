@@ -2816,6 +2816,47 @@ int main() {
 -D TBB_USE_DEBUG=1
 ```
 
+### 🧠 Cache Locality Checklist
+
+| **Aspect**              | **Best Practices**                                                                 |
+|-------------------------|------------------------------------------------------------------------------------|
+| Spatial Locality        | Access memory sequentially (e.g. row-wise traversal of arrays).                   |
+| Temporal Locality       | Reuse recently accessed data (e.g. loop variables, accumulators).                 |
+| Contiguous Layouts      | Prefer `std::vector` or raw arrays over `std::list` or scattered allocations.     |
+| Loop Nesting Order      | Match access pattern to memory layout (e.g. row-major vs column-major).           |
+| Blocking/Tiling         | Use cache-aware blocking for matrix operations to fit working set in cache.       |
+| Prefetching             | Use compiler hints or manual prefetch (`__builtin_prefetch`) for predictable access. |
+| Alignment               | Align data structures to cache line boundaries using `alignas(64)` or padding.    |
+
+
+### 🚫 False Sharing Checklist
+
+| **Scenario**                           | **Mitigation Strategy**                                                       |
+|----------------------------------------|--------------------------------------------------------------------------------|
+| Threads write to adjacent variables    | Pad structs so each thread’s data lands in separate cache lines.              |
+| Shared counters or accumulators        | Use thread-local storage or atomic variables with padding.                    |
+| Arrays accessed by thread index        | Space out elements (`data[i * CACHE_LINE_SIZE]`) to avoid overlap.            |
+| Structs with multiple fields           | Use `alignas(64)` or manual padding between fields.                           |
+| Multithreaded loop performance drop    | Profile with tools like `perf`, `VTune`, or `Cachegrind` to detect sharing.   |
+
+
+### ✅ True Sharing Checklist
+
+| **Scenario**                           | **Best Practices**                                                             |
+|----------------------------------------|--------------------------------------------------------------------------------|
+| Threads read/write same variable       | Use proper synchronization (mutex, atomic, or reduction).                     |
+| Shared data intentionally accessed     | Acceptable if synchronized and access is infrequent.                          |
+| Cache line bouncing due to shared writes | Minimize shared writes or redesign to reduce contention.                   |
+| Shared read-only data                  | Safe and cache-friendly if not modified.                                      |
+| Intentional sharing (e.g. work queues) | Use lock-free structures or fine-grained locks.                               |
+
+#### 🧪 Bonus: Diagnostic Tips
+
+- 🔍 Suspect false sharing? Look for performance degradation as thread count increases.
+- 📊 Benchmark variants: Compare padded vs unpadded structs, AoS vs SoA layouts.
+- 🧵 Thread affinity: Pin threads to cores to reduce cache line bouncing.
+- 🧠 Memory mountain: Use stride-based benchmarks to visualize locality effects.
+
 
 ## References 
 
